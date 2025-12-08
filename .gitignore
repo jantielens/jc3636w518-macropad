@@ -1,0 +1,25 @@
+# Build output
+build/
+bin/arduino-cli
+
+# Auto-generated web assets
+src/app/web_assets.h
+
+# Arduino CLI configuration
+.arduino15/
+.cli-config.yml
+arduino-cli.yaml
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

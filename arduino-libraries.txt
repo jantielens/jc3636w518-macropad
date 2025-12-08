@@ -1,0 +1,23 @@
+# Arduino Libraries for ESP32 Template Project
+#
+# Format: One library per line
+# - Library names must match arduino-cli library names exactly
+# - You can specify versions: LibraryName@1.2.3
+# - Lines starting with # are comments
+# - Empty lines are ignored
+#
+# Examples:
+#   WiFi
+#   ArduinoJson@6.21.3
+#   PubSubClient@2.8
+#
+# To find library names: arduino-cli lib search <keyword>
+
+# Core libraries
+ArduinoJson@7.2.1
+ESP Async WebServer@3.9.0
+Async TCP@3.4.9
+
+# Note: NetBIOS library is included in ESP32 core (no separate install needed)
+
+# Add additional libraries below:
