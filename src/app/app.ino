@@ -1,15 +1,47 @@
 #include "../version.h"
+
+#if defined(BOARD_JC3636W518)
+#include "../boards/jc3636w518/board_config.h"
+#else
 #include "board_config.h"
+#endif
+
 #include "config_manager.h"
 #include "web_portal.h"
 #include "log_manager.h"
+
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+#include "display_driver.h"
+#include "ui/screen_manager.h"
+#include "ui/ui_events.h"
+#include <lvgl.h>
+// Force-include UI implementation so Arduino CLI compiles it with the sketch
+#include "display_driver.cpp"
+#include "ui/base_screen.cpp"
+#include "ui/ui_events.cpp"
+#include "ui/screens/splash_screen.cpp"
+#include "ui/screen_manager.cpp"
+#endif
+
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <lwip/netif.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 
 // Configuration
 DeviceConfig device_config;
 bool config_loaded = false;
+
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+bool display_ready = false;
+constexpr unsigned long MIN_SPLASH_MS = 2000; // ensure splash visible for at least 2s
+constexpr unsigned long MIN_STATUS_DWELL_MS = 1000; // show final status at least 1s
+unsigned long splash_start_ms = 0;
+unsigned long wifi_connected_at = 0;
+bool wifi_connected = false;
+unsigned long last_boot_status_ms = 0;
+#endif
 
 // WiFi retry settings
 const unsigned long WIFI_BACKOFF_BASE = 3000; // 3 seconds base (DHCP typically needs 2-3s)
@@ -22,6 +54,26 @@ unsigned long lastHeartbeat = 0;
 const unsigned long WIFI_CHECK_INTERVAL = 10000; // 10 seconds
 unsigned long lastWiFiCheck = 0;
 
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+bool enqueue_boot_status(const char *text) {
+  if (!text) return false;
+  UiEvent evt{};
+  evt.type = UiEventType::BootStatus;
+  strlcpy(evt.msg, text, sizeof(evt.msg));
+  bool ok = ui_publish(evt);
+  last_boot_status_ms = millis();
+  return ok;
+}
+
+// Small helper to pump LVGL/UI during blocking operations (setup/connect)
+static inline void ui_pump_if_ready() {
+  if (display_ready) {
+    board_display_loop();
+    UI.loop();
+  }
+}
+#endif
+
 // WiFi event handlers for connection lifecycle monitoring
 void onWiFiConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
   Logger.logMessage("WiFi", "Connected to AP - waiting for IP");
@@ -29,11 +81,18 @@ void onWiFiConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
 
 void onWiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info) {
   Logger.logMessagef("WiFi", "Got IP: %s", WiFi.localIP().toString().c_str());
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+  wifi_connected = true;
+  wifi_connected_at = millis();
+#endif
 }
 
 void onWiFiDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
   uint8_t reason = info.wifi_sta_disconnected.reason;
   Logger.logMessagef("WiFi", "Disconnected - reason: %d", reason);
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+  wifi_connected = false;
+#endif
   
   // Common disconnect reasons:
   // 2 = AUTH_EXPIRE, 3 = AUTH_LEAVE, 4 = ASSOC_EXPIRE
@@ -66,6 +125,21 @@ void setup()
   // Logger.logLinef("Board: %s", board_get_custom_identifier());
   // #endif
   Logger.logEnd();
+
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+  Logger.logMessage("Display", "Initializing JC3636W518 round display");
+  board_display_init();
+  ui_events_init();
+  UI.begin(ScreenId::Splash);
+  Logger.logMessage("UI", "Splash shown (UI.begin)");
+  enqueue_boot_status("Booting...");
+  // Force immediate LVGL flush so splash shows right away
+  lv_obj_invalidate(lv_scr_act());
+  lv_timer_handler();
+  ui_pump_if_ready();
+  display_ready = true;
+  splash_start_ms = millis();
+#endif
   
   // Initialize board-specific hardware
   #if HAS_BUILTIN_LED
@@ -89,9 +163,17 @@ void setup()
   // Start WiFi BEFORE initializing web server (critical for ESP32-C3)
   if (!config_loaded) {
     Logger.logMessage("Main", "No config - starting AP mode");
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+    enqueue_boot_status("No config - AP mode");
+    ui_pump_if_ready();
+#endif
     web_portal_start_ap();
   } else {
     Logger.logMessage("Main", "Config loaded - connecting to WiFi");
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+    enqueue_boot_status("Connecting to WiFi...");
+    ui_pump_if_ready();
+#endif
     if (connect_wifi()) {
       start_mdns();
     } else {
@@ -109,6 +191,10 @@ void setup()
         start_mdns();
       } else {
         Logger.logMessage("Main", "WiFi failed after reset - fallback to AP");
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+        enqueue_boot_status("WiFi failed - AP mode");
+        ui_pump_if_ready();
+#endif
         web_portal_start_ap();
       }
     }
@@ -125,6 +211,24 @@ void loop()
 {
   // Handle web portal (DNS for captive portal)
   web_portal_handle();
+
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+  if (display_ready) {
+    board_display_loop();
+    UI.loop();
+
+    // If connected and not in AP mode, navigate off splash after minimum duration
+    if (UI.currentId() == ScreenId::Splash && wifi_connected && !web_portal_is_ap_mode()) {
+      unsigned long now = millis();
+      unsigned long elapsed = now - splash_start_ms;
+      unsigned long since_status = now - last_boot_status_ms;
+      if (elapsed >= MIN_SPLASH_MS && since_status >= MIN_STATUS_DWELL_MS) {
+        Logger.logMessagef("UI", "Navigating Splash->MacroPad (elapsed=%lums, since_status=%lums)", elapsed, since_status);
+        UI.navigate(ScreenId::MacroPad, LV_SCR_LOAD_ANIM_NONE, 0, 0);
+      }
+    }
+  }
+#endif
   
   unsigned long currentMillis = millis();
   
@@ -154,7 +258,11 @@ void loop()
     lastHeartbeat = currentMillis;
   }
   
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+  delay(5); // Smaller delay when display is active
+#else
   delay(10);
+#endif
 }
 
 // Connect to WiFi with exponential backoff
@@ -303,6 +411,14 @@ void start_mdns() {
   
   if (MDNS.begin(sanitized)) {
     Logger.logLinef("Name: %s.local", sanitized);
+    
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+    // Update splash screen with connection details (IP + mDNS hostname)
+    char status_msg[64];
+    snprintf(status_msg, sizeof(status_msg), "Connected\n%s\nhttp://%s.local", 
+             WiFi.localIP().toString().c_str(), sanitized);
+    enqueue_boot_status(status_msg);
+#endif
     
     // Add HTTP service
     MDNS.addService("http", "tcp", 80);

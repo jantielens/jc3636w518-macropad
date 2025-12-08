@@ -21,3 +21,8 @@ Async TCP@3.4.9
 # Note: NetBIOS library is included in ESP32 core (no separate install needed)
 
 # Add additional libraries below:
+
+# Display & GUI (JC3636W518)
+lvgl@8.3.11
+ESP32_Display_Panel@0.1.4
+ESP32_IO_Expander@0.0.2

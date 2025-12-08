@@ -5,6 +5,9 @@ bin/arduino-cli
 # Auto-generated web assets
 src/app/web_assets.h
 
+# Sample/reference projects
+sample/
+
 # Arduino CLI configuration
 .arduino15/
 .cli-config.yml

@@ -27,8 +27,8 @@
 #   - REST API /api/info response (both values included)
 #   Example: "ESP32 Template WiFi"
 #
-PROJECT_NAME="esp32-template-wifi"
-PROJECT_DISPLAY_NAME="ESP32 Template WiFi"
+PROJECT_NAME="jc3636w518-macropad"
+PROJECT_DISPLAY_NAME="JC3636W518 Macropad"
 
 # Board configuration (FQBN - Fully Qualified Board Name)
 # Define target boards as an associative array: [FQBN]="board-name"
@@ -46,8 +46,10 @@ PROJECT_DISPLAY_NAME="ESP32 Template WiFi"
 #   ["esp32:esp32:dfrobot_firebeetle2_esp32c6:CDCOnBoot=cdc"]="esp32c6" # C6 with USB CDC enabled
 #   ["esp32:esp32:esp32c6:CDCOnBoot=cdc"]="esp32c6supermini"            # C6 with USB CDC enabled (generic Super Mini variant)
 declare -A FQBN_TARGETS=(
-    ["esp32:esp32:esp32"]="esp32"
-    ["esp32:esp32:nologo_esp32c3_super_mini:CDCOnBoot=cdc"]="esp32c3"
+    # ESP32-S3 round display board (JC3636W518)
+    # CDCOnBoot enables USB serial (appears as /dev/ttyACM*). Adjust if needed.
+    # Include official menu options to ensure correct partition size and PSRAM/flash settings.
+    ["esp32:esp32:esp32s3:CDCOnBoot=cdc,PartitionScheme=huge_app,PSRAM=opi,FlashSize=16M,FlashMode=qio120"]="jc3636w518"
 )
 
 # Default board (used when only one board is configured)
