@@ -7,8 +7,11 @@
 #endif
 
 #include "config_manager.h"
+#include "macro_pad_manager.h"
 #include "web_portal.h"
 #include "log_manager.h"
+#include "BleKeyboard.h"
+#include "keystrokes_handler.h"
 
 #if defined(HAS_DISPLAY) && HAS_DISPLAY
 #include "display_driver.h"
@@ -32,6 +35,9 @@
 // Configuration
 DeviceConfig device_config;
 bool config_loaded = false;
+
+// BLE Keyboard
+BleKeyboard* bleKeyboard = nullptr;
 
 #if defined(HAS_DISPLAY) && HAS_DISPLAY
 bool display_ready = false;
@@ -153,6 +159,14 @@ void setup()
   // Try to load saved configuration
   config_loaded = config_manager_load(&device_config);
   
+  // Initialize macropad configuration manager
+  macro_pad_manager_init();
+  if (macro_pad_manager_load()) {
+    Logger.logMessagef("Main", "Loaded %d macropad configs", macro_pad_manager_count());
+  } else {
+    Logger.logMessage("Main", "No macropad configs found (first boot)");
+  }
+  
   if (!config_loaded) {
     // No config found - set default device name
     String default_name = config_manager_get_default_device_name();
@@ -202,6 +216,18 @@ void setup()
   
   // Initialize web portal AFTER WiFi is started
   web_portal_init(&device_config);
+  
+  // Initialize BLE keyboard with device name
+  Logger.logBegin("BLE Keyboard");
+  bleKeyboard = new BleKeyboard(device_config.device_name, "JC3636W518 Macropad", 100);
+  bleKeyboard->begin();
+  Logger.logMessagef("BLE", "Started with name: %s", device_config.device_name);
+  Logger.logEnd();
+  
+  // Initialize keystrokes handler
+  if (keystrokes_handler_init(bleKeyboard)) {
+    Logger.logMessage("Main", "Keystrokes handler ready");
+  }
   
   lastHeartbeat = millis();
   Logger.logMessage("Main", "Setup complete");
