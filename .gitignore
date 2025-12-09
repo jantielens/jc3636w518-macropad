@@ -5,6 +5,11 @@ bin/arduino-cli
 # Auto-generated web assets
 src/app/web_assets.h
 
+# Auto-generated HTML pages (DO NOT EDIT - edit templates in shared/ and pages/ instead)
+src/app/web/index.html
+src/app/web/network.html
+src/app/web/update.html
+
 # Sample/reference projects
 sample/
 

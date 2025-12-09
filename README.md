@@ -63,18 +63,18 @@ jc3636w518-macropad/
 │   │   │   └── screens/
 │   │   │       └── splash_screen.h/cpp # Boot splash screen
 │   │   └── web/                   # Web portal sources
-│   │       ├── index.html             # Generated: Macropad page
-│   │       ├── network.html           # Generated: Network config page
-│   │       ├── update.html            # Generated: Update & reset page
-│   │       ├── portal.css             # Shared styles
-│   │       ├── portal.js              # Shared client logic
-│   │       ├── shared/                # Reusable components
+│   │       ├── index.html             # ⚠️ AUTO-GENERATED (DO NOT EDIT)
+│   │       ├── network.html           # ⚠️ AUTO-GENERATED (DO NOT EDIT)
+│   │       ├── update.html            # ⚠️ AUTO-GENERATED (DO NOT EDIT)
+│   │       ├── portal.css             # ✏️ Editable: Shared styles
+│   │       ├── portal.js              # ✏️ Editable: Shared client logic
+│   │       ├── shared/                # ✏️ Editable: Reusable components
 │   │       │   ├── header.html        # Page header with badges
 │   │       │   ├── nav.html           # Navigation tabs
 │   │       │   ├── footer.html        # Page footer
 │   │       │   ├── health-widget.html # Health monitoring widget
 │   │       │   └── reboot-overlay.html# Reboot/reconnection dialogs
-│   │       └── pages/                 # Page-specific content
+│   │       └── pages/                 # ✏️ Editable: Page-specific content
 │   │           ├── index-content.html # Macropad settings form
 │   │           ├── network-content.html# Network settings form
 │   │           └── update-content.html# OTA upload & factory reset
@@ -122,6 +122,23 @@ The project uses LVGL 8.3.11 for the GUI framework:
 
 
 ## 🌐 Web Portal & REST API
+
+### ⚠️ CRITICAL: HTML File Generation
+
+**DO NOT directly edit these files** - they are auto-generated during build:
+- `src/app/web/index.html`
+- `src/app/web/network.html`
+- `src/app/web/update.html`
+
+**Instead, edit the template files:**
+- `src/app/web/shared/` - Header, nav, footer, widgets (used by all pages)
+- `src/app/web/pages/` - Page-specific content forms
+- `src/app/web/portal.css` - Styles (editable)
+- `src/app/web/portal.js` - Client-side logic (editable)
+
+The build process runs `tools/build-html-pages.sh` which assembles complete HTML files from templates.
+
+### Portal Access
 
 Access the configuration portal at:
 - **AP Mode** (no WiFi configured): `http://192.168.4.1`

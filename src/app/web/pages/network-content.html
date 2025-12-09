@@ -1,10 +1,12 @@
 
-        <div id="form-loading-overlay" class="form-loading-overlay">
-            <div class="spinner" style="width: 50px; height: 50px;"></div>
-            <p style="margin-top: 15px; color: #667eea; font-weight: 600;">Loading configuration...</p>
-        </div>
+        <div class="form-container">
+            <div id="form-loading-overlay" class="form-loading-overlay">
+                <div class="spinner" style="width: 50px; height: 50px;"></div>
+                <p style="margin-top: 15px; color: #667eea; font-weight: 600;">Loading configuration...</p>
+            </div>
 
-        <form id="config-form">
+            <form id="config-form">
+            <div class="sections-grid">
             <section class="section">
                 <h2>📶 WiFi Settings</h2>
                 <div class="form-group">
@@ -61,6 +63,7 @@
                     <small>Optional - leave empty if not needed</small>
                 </div>
             </section>
+            </div>
 
             <section class="section">
                 <div class="button-group">
@@ -69,7 +72,8 @@
                     <button type="button" id="reboot-btn" class="btn btn-secondary">Reboot</button>
                 </div>
             </section>
-        </form>
+            </form>
+        </div>
 
     <script>
         const currentPage = 'network';

@@ -6,6 +6,27 @@ ESP32 Arduino development template using `arduino-cli` for headless builds. Desi
 
 ## Architecture
 
+### ⚠️ CRITICAL: Web Portal HTML Files Are Auto-Generated
+
+**NEVER edit these files directly** - they are regenerated on every build:
+- `src/app/web/index.html`
+- `src/app/web/network.html`
+- `src/app/web/update.html`
+
+**Always edit the source templates instead:**
+- `src/app/web/shared/*.html` - Reusable components (header, nav, footer, widgets)
+- `src/app/web/pages/*.html` - Page-specific content forms
+- `src/app/web/portal.css` - Styles (editable)
+- `src/app/web/portal.js` - Client logic (editable)
+
+The build script (`build.sh`) automatically runs `tools/build-html-pages.sh` which:
+1. Reads template files from `shared/` and `pages/`
+2. Assembles complete HTML pages
+3. Writes to `index.html`, `network.html`, `update.html`
+4. These files are then embedded into firmware via `web_assets.h`
+
+Changes to the generated HTML files will be **lost on next build**.
+
 - **Build System**: Custom bash scripts wrapping `arduino-cli` (installed locally to `./bin/`)
 - **Sketch Location**: Main Arduino file at `src/app/app.ino`
 - **Board Configuration**: Flexible system with optional board-specific overrides
@@ -99,6 +120,11 @@ All scripts use absolute paths via `SCRIPT_DIR` resolution - they work from any 
 - Floating health widget with compact/expanded views
 - Breathing animation on status updates
 
+**File Editing Rules**:
+- ✅ **EDIT**: `portal.css`, `portal.js`, `shared/*.html`, `pages/*.html`
+- ❌ **DO NOT EDIT**: `index.html`, `network.html`, `update.html` (auto-generated)
+- After editing templates, run `./build.sh` to regenerate HTML files
+
 ## WSL-Specific Requirements
 
 Serial port access requires:
@@ -130,13 +156,13 @@ See `docs/wsl-development.md` for complete USB/IP setup guide.
 - `src/app/web_portal.cpp/h` - Async web server and REST API endpoints
 - `src/app/web_assets.cpp/h` - Embedded HTML/CSS/JS (auto-generated from `web/`)
 - `src/app/config_manager.cpp/h` - NVS-based configuration storage
-- `src/app/web/index.html` - Generated: Macropad page
-- `src/app/web/network.html` - Generated: Network configuration page
-- `src/app/web/update.html` - Generated: OTA & factory reset page
-- `src/app/web/portal.css` - Shared styles (gradients, animations, responsive)
-- `src/app/web/portal.js` - Shared client logic (API calls, page inits, health widget)
-- `src/app/web/shared/` - Reusable HTML components (header, nav, footer, widgets)
-- `src/app/web/pages/` - Page-specific content forms
+- `src/app/web/index.html` - ⚠️ AUTO-GENERATED (DO NOT EDIT)
+- `src/app/web/network.html` - ⚠️ AUTO-GENERATED (DO NOT EDIT)
+- `src/app/web/update.html` - ⚠️ AUTO-GENERATED (DO NOT EDIT)
+- `src/app/web/portal.css` - ✏️ EDITABLE: Shared styles (gradients, animations, responsive)
+- `src/app/web/portal.js` - ✏️ EDITABLE: Shared client logic (API calls, page inits, health widget)
+- `src/app/web/shared/` - ✏️ EDITABLE: Reusable HTML components (header, nav, footer, widgets)
+- `src/app/web/pages/` - ✏️ EDITABLE: Page-specific content forms
 - `src/version.h` - Firmware version tracking
 
 ### Configuration
