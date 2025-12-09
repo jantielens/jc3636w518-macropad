@@ -8,7 +8,16 @@
 enum class ScreenId : uint8_t {
   Splash = 0,
   Home,
-  MacroPad,
+  MacroPad0,
+  MacroPad1,
+  MacroPad2,
+  MacroPad3,
+  MacroPad4,
+  MacroPad5,
+  MacroPad6,
+  MacroPad7,
+  MacroPad8,
+  MacroPad9,
   // Add more screens as needed
 };
 
@@ -21,6 +30,10 @@ class ScreenManager {
                 lv_scr_load_anim_t anim = LV_SCR_LOAD_ANIM_NONE,
                 uint32_t time = 300,
                 uint32_t delay = 0);
+  
+  void navigateToNext();      // Navigate to next macropad in sequence
+  void navigateToPrevious();  // Navigate to previous macropad in sequence
+  void rebuildNavigation();   // Rebuild navigation sequence after config changes
   
   ScreenId currentId() const { return current_id_; }
 

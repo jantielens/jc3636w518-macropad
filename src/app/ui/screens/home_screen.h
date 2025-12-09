@@ -27,6 +27,7 @@ class HomeScreen : public BaseScreen {
   void build();
   void updateStats();
   static void timerCallback(lv_timer_t* timer);
+  static void screenTapCallback(lv_event_t* e);
   
   lv_obj_t* root_ = nullptr;
   lv_timer_t* update_timer_ = nullptr;

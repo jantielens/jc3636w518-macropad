@@ -7,6 +7,7 @@
 #include "home_screen.h"
 #include "../../device_stats.h"
 #include "../../web_assets.h"   // PROJECT_DISPLAY_NAME
+#include "../screen_manager.h"
 #include <lvgl.h>
 
 lv_obj_t* HomeScreen::root() {
@@ -57,6 +58,10 @@ void HomeScreen::build() {
   lv_obj_set_style_bg_opa(root_, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(root_, 0, 0);
   lv_obj_set_style_pad_all(root_, 20, 0);
+  
+  // Make entire screen tappable to navigate to next screen
+  lv_obj_add_flag(root_, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(root_, screenTapCallback, LV_EVENT_CLICKED, this);
   
   // Device name at top
   device_name_label_ = lv_label_create(root_);
@@ -205,6 +210,14 @@ void HomeScreen::timerCallback(lv_timer_t* timer) {
   HomeScreen* screen = static_cast<HomeScreen*>(timer->user_data);
   if (screen) {
     screen->updateStats();
+  }
+}
+
+void HomeScreen::screenTapCallback(lv_event_t* e) {
+  HomeScreen* screen = static_cast<HomeScreen*>(lv_event_get_user_data(e));
+  if (screen) {
+    // Navigate to next screen in sequence
+    UI.navigateToNext();
   }
 }
 

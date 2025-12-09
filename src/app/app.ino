@@ -25,6 +25,7 @@
 #include "ui/ui_events.cpp"
 #include "ui/screens/splash_screen.cpp"
 #include "ui/screens/home_screen.cpp"
+#include "ui/screens/macropad_screen.cpp"
 #include "ui/screen_manager.cpp"
 #endif
 
@@ -167,7 +168,90 @@ void setup()
     Logger.logMessagef("Main", "Loaded %d macropad configs", macro_pad_manager_count());
   } else {
     Logger.logMessage("Main", "No macropad configs found (first boot)");
+    
+    // Create test configurations on first boot (heap allocation to avoid stack overflow)
+    Logger.logMessage("Main", "Creating test macropad configs");
+    
+    MacroPad* pad = new MacroPad();
+    
+    // Test Config 1: RADIAL layout
+    memset(pad, 0, sizeof(MacroPad));
+    pad->id = 0;
+    strlcpy(pad->name, "Test Radial", sizeof(pad->name));
+    pad->template_type = TEMPLATE_RADIAL;
+    pad->button_count = 9;
+    pad->enabled = true;
+    
+    for (int i = 0; i <= 6; i++) {
+      pad->buttons[i].position = i;
+      pad->buttons[i].label_type = LABEL_TEXT;
+      snprintf(pad->buttons[i].label, sizeof(pad->buttons[i].label), "Btn %d", i);
+      pad->buttons[i].action_type = ACTION_KEYSTROKES;
+      strlcpy(pad->buttons[i].keystrokes, "a", sizeof(pad->buttons[i].keystrokes));
+      pad->buttons[i].enabled = true;
+    }
+    
+    pad->buttons[7].position = 7;
+    pad->buttons[7].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[7].label, "Home", sizeof(pad->buttons[7].label));
+    pad->buttons[7].action_type = ACTION_NAV_HOME;
+    pad->buttons[7].enabled = true;
+    
+    pad->buttons[8].position = 8;
+    pad->buttons[8].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[8].label, "Next", sizeof(pad->buttons[8].label));
+    pad->buttons[8].action_type = ACTION_NAV_NEXT;
+    pad->buttons[8].enabled = true;
+    
+    macro_pad_manager_add(pad);
+    Logger.logMessage("Main", "  Created Test Radial (9 buttons)");
+    
+    // Test Config 2: GRID layout
+    memset(pad, 0, sizeof(MacroPad));
+    pad->id = 1;
+    strlcpy(pad->name, "Test Grid", sizeof(pad->name));
+    pad->template_type = TEMPLATE_GRID;
+    pad->button_count = 9;
+    pad->enabled = true;
+    
+    for (int i = 0; i <= 6; i++) {
+      pad->buttons[i].position = i;
+      pad->buttons[i].label_type = LABEL_TEXT;
+      snprintf(pad->buttons[i].label, sizeof(pad->buttons[i].label), "Grid %d", i);
+      pad->buttons[i].action_type = ACTION_KEYSTROKES;
+      strlcpy(pad->buttons[i].keystrokes, "a", sizeof(pad->buttons[i].keystrokes));
+      pad->buttons[i].enabled = true;
+    }
+    
+    pad->buttons[7].position = 7;
+    pad->buttons[7].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[7].label, "Prev", sizeof(pad->buttons[7].label));
+    pad->buttons[7].action_type = ACTION_NAV_PREV;
+    pad->buttons[7].enabled = true;
+    
+    pad->buttons[8].position = 8;
+    pad->buttons[8].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[8].label, "Home", sizeof(pad->buttons[8].label));
+    pad->buttons[8].action_type = ACTION_NAV_HOME;
+    pad->buttons[8].enabled = true;
+    
+    macro_pad_manager_add(pad);
+    Logger.logMessage("Main", "  Created Test Grid (9 buttons)");
+    
+    delete pad;
+    
+    if (macro_pad_manager_save()) {
+      Logger.logMessage("Main", "Test configs saved successfully");
+    } else {
+      Logger.logMessage("Main", "Failed to save test configs");
+    }
   }
+  
+#if defined(HAS_DISPLAY) && HAS_DISPLAY
+  // Build navigation sequence now that macro pad configs are loaded
+  UI.rebuildNavigation();
+  Logger.logMessage("UI", "Navigation sequence built");
+#endif
   
   // Initialize device stats tracking
   device_stats_init();

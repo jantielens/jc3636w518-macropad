@@ -1,3 +1,4 @@
 #include "base_screen.h"
 
-// Pure interface - no implementation needed
+// Initialize the global touch tracker
+BaseScreen::TouchTracker BaseScreen::touch_tracker_;
