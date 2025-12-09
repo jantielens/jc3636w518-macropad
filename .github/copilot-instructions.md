@@ -128,11 +128,15 @@ See `docs/wsl-development.md` for complete USB/IP setup guide.
 - `src/boards/[board-name]/board_config.h` - Optional board-specific overrides
 - `src/boards/[board-name]/board_config.cpp` - Optional board-specific implementations
 - `src/app/web_portal.cpp/h` - Async web server and REST API endpoints
-- `src/app/web_assets.cpp/h` - Embedded HTML/CSS/JS from `web/` directory
+- `src/app/web_assets.cpp/h` - Embedded HTML/CSS/JS (auto-generated from `web/`)
 - `src/app/config_manager.cpp/h` - NVS-based configuration storage
-- `src/app/web/portal.html` - Web interface markup
-- `src/app/web/portal.css` - Styles (gradients, animations, responsive)
-- `src/app/web/portal.js` - Client-side logic (API calls, health updates)
+- `src/app/web/index.html` - Generated: Macropad page
+- `src/app/web/network.html` - Generated: Network configuration page
+- `src/app/web/update.html` - Generated: OTA & factory reset page
+- `src/app/web/portal.css` - Shared styles (gradients, animations, responsive)
+- `src/app/web/portal.js` - Shared client logic (API calls, page inits, health widget)
+- `src/app/web/shared/` - Reusable HTML components (header, nav, footer, widgets)
+- `src/app/web/pages/` - Page-specific content forms
 - `src/version.h` - Firmware version tracking
 
 ### Configuration

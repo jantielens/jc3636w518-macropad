@@ -1,0 +1,80 @@
+
+        <div id="form-loading-overlay" class="form-loading-overlay">
+            <div class="spinner" style="width: 50px; height: 50px;"></div>
+            <p style="margin-top: 15px; color: #667eea; font-weight: 600;">Loading configuration...</p>
+        </div>
+
+        <form id="config-form">
+            <section class="section">
+                <h2>📶 WiFi Settings</h2>
+                <div class="form-group">
+                    <label for="wifi_ssid">WiFi SSID</label>
+                    <input type="text" id="wifi_ssid" name="wifi_ssid" maxlength="31" required>
+                    <small>Network name (max 31 characters)</small>
+                </div>
+                <div class="form-group">
+                    <label for="wifi_password">WiFi Password</label>
+                    <input type="password" id="wifi_password" name="wifi_password" maxlength="63">
+                    <small>Leave empty if network is open</small>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>🔧 Device Settings</h2>
+                <div class="form-group">
+                    <label for="device_name">Device Name</label>
+                    <input type="text" id="device_name" name="device_name" maxlength="31" required>
+                    <small>Can include spaces and special characters</small>
+                </div>
+                <div class="form-group">
+                    <label>mDNS Name</label>
+                    <div id="device_name_sanitized" class="mdns-label">esp32-xxxx.local</div>
+                    <small>Auto-generated from device name for network discovery</small>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>🌐 Network Configuration (Optional)</h2>
+                <div class="form-group">
+                    <label for="fixed_ip">Fixed IP Address</label>
+                    <input type="text" id="fixed_ip" name="fixed_ip" maxlength="15" placeholder="e.g. 192.168.1.100">
+                    <small>Leave empty for DHCP</small>
+                </div>
+                <div class="form-group">
+                    <label for="subnet_mask">Subnet Mask</label>
+                    <input type="text" id="subnet_mask" name="subnet_mask" maxlength="15" placeholder="e.g. 255.255.255.0">
+                    <small>Required if fixed IP is set</small>
+                </div>
+                <div class="form-group">
+                    <label for="gateway">Gateway</label>
+                    <input type="text" id="gateway" name="gateway" maxlength="15" placeholder="e.g. 192.168.1.1">
+                    <small>Required if fixed IP is set</small>
+                </div>
+                <div class="form-group">
+                    <label for="dns1">DNS Server 1</label>
+                    <input type="text" id="dns1" name="dns1" maxlength="15" placeholder="Defaults to gateway">
+                    <small>Optional - defaults to gateway if not provided</small>
+                </div>
+                <div class="form-group">
+                    <label for="dns2">DNS Server 2</label>
+                    <input type="text" id="dns2" name="dns2" maxlength="15" placeholder="Optional">
+                    <small>Optional - leave empty if not needed</small>
+                </div>
+            </section>
+
+            <section class="section">
+                <div class="button-group">
+                    <button type="submit" class="btn btn-primary">Save & Reboot</button>
+                    <button type="button" id="save-only-btn" class="btn btn-secondary">Save Only</button>
+                    <button type="button" id="reboot-btn" class="btn btn-secondary">Reboot</button>
+                </div>
+            </section>
+        </form>
+
+    <script>
+        const currentPage = 'network';
+        document.addEventListener('DOMContentLoaded', () => {
+            initCommon(currentPage);
+            initNetworkPage();
+        });
+    </script>

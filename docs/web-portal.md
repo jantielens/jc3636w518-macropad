@@ -109,6 +109,91 @@ Recommended apps for finding devices:
 - **Angry IP Scanner** (Desktop) - Fast network scanner
 - **nmap** (Linux/macOS) - Command-line scanner
 
+## Multi-Page Portal Structure
+
+The portal uses a 3-page layout with shared navigation and components:
+
+### Pages
+
+| Page | URL | Purpose | Fields |
+|------|-----|---------|--------|
+| **Macropad** | `/` | Application-specific settings | Custom macropad configuration |
+| **Network** | `/network.html` | Network configuration | WiFi SSID, password, device name, fixed IP settings |
+| **Update** | `/update.html` | System maintenance | OTA firmware upload, factory reset |
+
+### Navigation
+
+Persistent tab navigation at top of every page:
+- Active page highlighted with blue gradient
+- In AP mode (core), non-network pages are grayed out but remain accessible
+- Clicking tabs navigates between pages
+
+### Standardized Controls
+
+All configuration pages include the same 3-button layout:
+
+| Button | Action | Use Case |
+|--------|--------|----------|
+| **Save & Reboot** | POST `/api/config?reboot=true` | Apply settings that require reboot (WiFi, device name, IP) |
+| **Save Only** | POST `/api/config?reboot=false` | Save without restart (for non-critical settings) |
+| **Reboot** | POST `/api/reboot` | Restart device without saving changes |
+
+**Benefits:**
+- Consistent interface across all pages
+- More control: tweak multiple settings, then reboot once
+- Faster iteration: save without waiting for reboot
+- Factory reset moved to Update page (logical grouping with destructive operations)
+
+### Component Architecture
+
+The portal uses a component-based build system:
+
+**Build Process:**
+1. `tools/build-html-pages.sh` assembles complete HTML pages from components
+2. `tools/minify-web-assets.sh` minifies and gzip-compresses all assets
+3. Assets embedded in `src/app/web_assets.h` as PROGMEM byte arrays
+
+**Shared Components** (`src/app/web/shared/`):
+- `header.html` - Page header with firmware version badges
+- `nav.html` - Navigation tabs with active page highlighting
+- `footer.html` - Build info footer
+- `health-widget.html` - Floating health monitoring widget
+- `reboot-overlay.html` - Reboot/reconnection dialogs
+
+**Page Content** (`src/app/web/pages/`):
+- `index-content.html` - Macropad settings form
+- `network-content.html` - Network configuration form
+- `update-content.html` - OTA upload and factory reset section
+
+**Shared Assets:**
+- `portal.css` - Single stylesheet for all pages
+- `portal.js` - Single JavaScript file with page-specific init functions
+
+### Configuration Merge Pattern
+
+To prevent partial form submissions from overwriting other settings, each page:
+
+1. **Loads full config** on page init via `GET /api/config`
+2. **Updates only its fields** when user submits form
+3. **Sends complete config** back to backend
+
+**Example (Index page):**
+```javascript
+// Load full config including all fields
+const config = await fetch('/api/config').then(r => r.json());
+
+// User only sees dummy_setting field, but we preserve everything
+config.dummy_setting = form.value;
+
+// Send complete config (wifi_ssid, device_name, etc. unchanged)
+await fetch('/api/config?reboot=true', {
+    method: 'POST',
+    body: JSON.stringify(config)  // All fields included
+});
+```
+
+This prevents the "clearing other settings" bug where a partial form would overwrite fields not present in the submission.
+
 ## User Interface
 
 ### Header Badges
@@ -151,11 +236,20 @@ Floating status widget with compact and expanded views:
 
 ### Configuration Sections
 
-- **📶 WiFi Settings**: SSID, password, fixed IP configuration
+**Macropad Page (`/`):**
+- **⚙️ Macropad Settings**: Application-specific configuration (currently `dummy_setting` placeholder)
+- Buttons: Save & Reboot, Save Only, Reboot
+
+**Network Page (`/network.html`):**
+- **📶 WiFi Settings**: SSID, password
 - **🔧 Device Settings**: Device name (used for mDNS hostname)
-- **🌐 Network Settings**: Fixed IP, subnet, gateway, DNS servers
-- **⚙️ Additional Settings**: Custom application settings
-- **📦 Firmware Update**: OTA binary upload (Full Mode only)
+- **🌐 Network Configuration**: Fixed IP, subnet, gateway, DNS servers (all optional)
+- Buttons: Save & Reboot, Save Only, Reboot
+
+**Update Page (`/update.html`):**
+- **📦 Firmware Update**: OTA binary upload with progress bar
+- **🔄 Factory Reset**: Erase all settings and restart in AP mode
+- Buttons: Upload Firmware (after file selected), Factory Reset
 
 ## Automatic Reconnection After Reboot
 
@@ -327,7 +421,12 @@ Returns current device configuration (passwords excluded).
 
 #### `POST /api/config`
 
-Save new configuration. Device reboots after successful save.
+Save new configuration with optional reboot control.
+
+**Query Parameters:**
+- `reboot` (optional): `true` (default) or `false`
+  - `?reboot=true` - Save and reboot device
+  - `?reboot=false` - Save without rebooting
 
 **Request Body:**
 ```json
@@ -353,10 +452,11 @@ Save new configuration. Device reboots after successful save.
 ```
 
 **Notes:**
-- Only fields present in request are updated
+- All configuration fields should be included in the request (merge pattern)
 - Password field: empty string = no change, non-empty = update
-- Device automatically reboots after successful save
-- Web portal automatically polls for reconnection (see [Automatic Reconnection](#automatic-reconnection-after-reboot))
+- When `reboot=true`, device automatically reboots after successful save
+- When `reboot=false`, settings saved to NVS but device continues running
+- Web portal automatically polls for reconnection after reboot (see [Automatic Reconnection](#automatic-reconnection-after-reboot))
 
 #### `DELETE /api/config`
 
@@ -453,15 +553,29 @@ Upload new firmware binary for over-the-air update.
 - `log_manager.cpp/h` - Print-compatible logging with nested blocks (serial output only)
 
 **Frontend (HTML/CSS/JS):**
-- `web/portal.html` - Semantic HTML structure
-- `web/portal.css` - Minimalist card-based design with gradients
-- `web/portal.js` - Vanilla JavaScript (no frameworks)
+- `web/index.html`, `web/network.html`, `web/update.html` - Generated multi-page structure
+- `web/portal.css` - Single stylesheet with card-based design, navigation tabs, health widget
+- `web/portal.js` - Single script with page-specific init functions (`initIndexPage()`, `initNetworkPage()`, `initUpdatePage()`)
+- `web/shared/` - Reusable HTML components (header, nav, footer, widgets)
+- `web/pages/` - Page-specific content forms
+
+**Build System:**
+1. `tools/build-html-pages.sh` - Assembles complete HTML pages from components
+   - Concatenates: header → nav → page-content → footer → widgets → overlays
+   - Substitutes placeholders: `{{PAGE_TITLE}}`, `{{ACTIVE_*}}`, `{{CURRENT_PAGE}}`
+   - Generates: `index.html`, `network.html`, `update.html`
+2. `tools/minify-web-assets.sh` - Minifies and compresses assets
+   - Calls `build-html-pages.sh` first
+   - Minifies HTML (whitespace removal), CSS (csscompressor), JS (rjsmin)
+   - Gzip compresses all assets
+   - Embeds as PROGMEM byte arrays in `web_assets.h`
 
 **Asset Compression:**
-- All web assets are automatically minified and gzip compressed during build
+- All web assets automatically minified and gzip compressed during build
 - Reduces flash storage and bandwidth by ~80%
 - Assets served with `Content-Encoding: gzip` header
 - Browser automatically decompresses (transparent to user)
+- Total portal size: ~14KB gzipped (down from ~76KB raw)
 
 ### CPU Usage Calculation
 
@@ -514,10 +628,20 @@ DNS server redirects all requests to device IP in AP mode:
 
 ### Modifying the Web Interface
 
-1. Edit files in `src/app/web/`:
-   - `portal.html` - Structure
-   - `portal.css` - Styling
-   - `portal.js` - Client logic
+1. Edit source files in `src/app/web/`:
+   - **Shared Components** (`shared/`):
+     - `header.html` - Page header with badges
+     - `nav.html` - Navigation tabs
+     - `footer.html` - Build info footer
+     - `health-widget.html` - Health monitoring widget
+     - `reboot-overlay.html` - Reboot/reconnection dialogs
+   - **Page Content** (`pages/`):
+     - `index-content.html` - Macropad settings form
+     - `network-content.html` - Network configuration form
+     - `update-content.html` - OTA upload & factory reset
+   - **Shared Assets**:
+     - `portal.css` - All styles
+     - `portal.js` - All client logic
 
 2. Rebuild to embed assets:
    ```bash
@@ -525,6 +649,7 @@ DNS server redirects all requests to device IP in AP mode:
    ```
    
    This automatically:
+   - Assembles complete HTML pages from components (`build-html-pages.sh`)
    - Minifies HTML (removes comments, collapses whitespace)
    - Minifies CSS using `csscompressor`
    - Minifies JavaScript using `rjsmin`
@@ -534,9 +659,12 @@ DNS server redirects all requests to device IP in AP mode:
    The build script shows compression statistics:
    ```
    Asset Summary (Original → Minified → Gzipped):
-     HTML portal.html: 11695 → 8261 → 2399 bytes (-80% total)
-     CSS  portal.css:  14348 → 10539 → 2864 bytes (-81% total)
-     JS   portal.js:   32032 → 19700 → 4931 bytes (-85% total)
+     HTML index.html:   7840 → 5660 → 1817 bytes (-77% total)
+     HTML network.html: 10739 → 7659 → 2286 bytes (-79% total)
+     HTML update.html:  7761 → 5693 → 1857 bytes (-77% total)
+     CSS  portal.css:   15098 → 11085 → 2961 bytes (-81% total)
+     JS   portal.js:    33517 → 20813 → 5430 bytes (-84% total)
+     TOTAL: 74955 → 50910 → 14351 bytes (-81% total)
    ```
 
 3. Upload and test:

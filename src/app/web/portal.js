@@ -11,23 +11,46 @@ const API_MODE = '/api/mode';
 const API_UPDATE = '/api/update';
 const API_VERSION = '/api/info'; // Used for connection polling
 
-let selectedFile = null;
-let portalMode = 'full'; // 'core' or 'full'
+// Global state
+const state = {
+    selectedFile: null,
+    portalMode: 'full',
+    config: null
+};
+
+// Helper: safely get element by ID
+const $ = (id) => document.getElementById(id);
+
+// Helper: safely set element value
+const setValue = (id, value) => {
+    const el = $(id);
+    if (el) el.value = value || '';
+};
+
+// Helper: safely set element text
+const setText = (id, text) => {
+    const el = $(id);
+    if (el) el.textContent = text || '';
+};
+
+// Helper: safely set element display
+const setDisplay = (id, display) => {
+    const el = $(id);
+    if (el) el.style.display = display;
+};
 
 /**
  * Display a message to the user
- * @param {string} message - Message text
- * @param {string} type - Message type: 'info', 'success', or 'error'
  */
 function showMessage(message, type = 'info') {
-    const statusDiv = document.getElementById('status-message');
+    const statusDiv = $('status-message');
+    if (!statusDiv) return;
+    
     statusDiv.textContent = message;
     statusDiv.className = `message ${type}`;
     statusDiv.style.display = 'block';
     
-    setTimeout(() => {
-        statusDiv.style.display = 'none';
-    }, 5000);
+    setTimeout(() => statusDiv.style.display = 'none', 5000);
 }
 
 /**
@@ -48,57 +71,39 @@ function showRebootDialog(options) {
         showProgress = false
     } = options;
 
-    const overlay = document.getElementById('reboot-overlay');
-    const titleElement = document.getElementById('reboot-title');
-    const rebootMsg = document.getElementById('reboot-message');
-    const rebootSubMsg = document.getElementById('reboot-submessage');
-    const reconnectStatus = document.getElementById('reconnect-status');
-    const progressContainer = document.getElementById('reboot-progress-container');
-    const spinner = document.getElementById('reboot-spinner');
-
-    // Set dialog content
-    titleElement.textContent = title;
-    rebootMsg.textContent = message;
+    setText('reboot-title', title);
+    setText('reboot-message', message);
+    setDisplay('reboot-progress-container', showProgress ? 'block' : 'none');
+    setDisplay('reboot-spinner', showProgress ? 'none' : 'block');
     
-    // Show/hide progress bar
-    if (progressContainer) {
-        progressContainer.style.display = showProgress ? 'block' : 'none';
-    }
-    
-    // Show/hide spinner
-    if (spinner) {
-        spinner.style.display = showProgress ? 'none' : 'block';
-    }
-    
-    // Handle AP mode reset (no auto-reconnect)
     if (context === 'reset') {
-        rebootSubMsg.textContent = 'Device will restart in AP mode. You must manually reconnect to the WiFi access point.';
-        reconnectStatus.style.display = 'none';
-        overlay.style.display = 'flex';
-        return; // Don't start polling for AP mode
+        setText('reboot-submessage', 'Device will restart in AP mode. You must manually reconnect to the WiFi access point.');
+        setDisplay('reconnect-status', 'none');
+        setDisplay('reboot-overlay', 'flex');
+        return;
     }
     
-    // Handle OTA (no auto-reconnect yet - wait for upload to complete)
     if (context === 'ota') {
-        rebootSubMsg.textContent = 'Uploading firmware...';
-        reconnectStatus.style.display = 'none';
-        overlay.style.display = 'flex';
-        return; // Don't start polling yet - OTA handler will start it after upload
+        setText('reboot-submessage', 'Uploading firmware...');
+        setDisplay('reconnect-status', 'none');
+        setDisplay('reboot-overlay', 'flex');
+        return;
     }
     
-    // For save/reboot cases, show best-effort reconnection message and start polling
     const targetAddress = newDeviceName ? `http://${sanitizeForMDNS(newDeviceName)}.local` : window.location.origin;
-    rebootSubMsg.innerHTML = `Attempting automatic reconnection...<br><small style="color: #888; margin-top: 8px; display: block;">If this fails, manually navigate to: <code style="color: #667eea; font-weight: 600;">${targetAddress}</code></small>`;
-    reconnectStatus.style.display = 'block';
+    const rebootSubMsg = $('reboot-submessage');
+    if (rebootSubMsg) {
+        rebootSubMsg.innerHTML = `Attempting automatic reconnection...<br><small style="color: #888; margin-top: 8px; display: block;">If this fails, manually navigate to: <code style="color: #667eea; font-weight: 600;">${targetAddress}</code></small>`;
+    }
     
-    overlay.style.display = 'flex';
+    setDisplay('reconnect-status', 'block');
+    setDisplay('reboot-overlay', 'flex');
     
-    // Start unified reconnection process
     startReconnection({
         context,
         newDeviceName,
-        statusElement: reconnectStatus,
-        messageElement: rebootMsg
+        statusElement: $('reconnect-status'),
+        messageElement: $('reboot-message')
     });
 }
 
@@ -273,15 +278,9 @@ async function loadMode() {
         if (!response.ok) return;
         
         const mode = await response.json();
-        portalMode = mode.mode || 'full';
+        state.portalMode = mode.mode || 'full';
         
-        // Show/hide additional settings based on mode
-        const additionalSettings = document.getElementById('additional-settings');
-        if (portalMode === 'core') {
-            additionalSettings.style.display = 'none';
-        } else {
-            additionalSettings.style.display = 'block';
-        }
+        setDisplay('additional-settings', state.portalMode === 'core' ? 'none' : 'block');
     } catch (error) {
         console.error('Error loading mode:', error);
     }
@@ -329,72 +328,56 @@ async function loadVersion() {
  */
 async function loadConfig() {
     try {
-        
         const response = await fetch(API_CONFIG);
-        if (!response.ok) {
-            throw new Error('Failed to load configuration');
+        if (!response.ok) throw new Error('Failed to load configuration');
+        
+        state.config = await response.json();
+        const hasPassword = state.config.wifi_ssid && state.config.wifi_ssid !== '';
+        
+        // WiFi settings (network page)
+        setValue('wifi_ssid', state.config.wifi_ssid);
+        const pwdField = $('wifi_password');
+        if (pwdField) {
+            pwdField.value = '';
+            pwdField.placeholder = hasPassword ? '(saved - leave blank to keep)' : '';
         }
         
-        const config = await response.json();
-        const hasConfig = config.wifi_ssid && config.wifi_ssid !== '';
+        // Device settings (network page)
+        setValue('device_name', state.config.device_name);
+        setText('device_name_sanitized', (state.config.device_name_sanitized || 'esp32-xxxx') + '.local');
         
-        // WiFi settings
-        document.getElementById('wifi_ssid').value = config.wifi_ssid || '';
-        const wifiPwdField = document.getElementById('wifi_password');
-        wifiPwdField.value = '';
-        wifiPwdField.placeholder = hasConfig ? '(saved - leave blank to keep)' : '';
+        // Fixed IP settings (network page)
+        setValue('fixed_ip', state.config.fixed_ip);
+        setValue('subnet_mask', state.config.subnet_mask);
+        setValue('gateway', state.config.gateway);
+        setValue('dns1', state.config.dns1);
+        setValue('dns2', state.config.dns2);
         
-        // Device settings
-        document.getElementById('device_name').value = config.device_name || '';
-        document.getElementById('device_name_sanitized').textContent = 
-            (config.device_name_sanitized || 'esp32-xxxx') + '.local';
+        // Dummy setting (index page)
+        setValue('dummy_setting', state.config.dummy_setting);
         
-        // Fixed IP settings
-        document.getElementById('fixed_ip').value = config.fixed_ip || '';
-        document.getElementById('subnet_mask').value = config.subnet_mask || '';
-        document.getElementById('gateway').value = config.gateway || '';
-        document.getElementById('dns1').value = config.dns1 || '';
-        document.getElementById('dns2').value = config.dns2 || '';
-        
-        // Dummy setting
-        document.getElementById('dummy_setting').value = config.dummy_setting || '';
-        
-        // Hide loading overlay (silent load)
-        document.getElementById('form-loading-overlay').style.display = 'none';
+        setDisplay('form-loading-overlay', 'none');
+        return state.config;
     } catch (error) {
-        // Hide loading overlay even on error so form is usable
-        document.getElementById('form-loading-overlay').style.display = 'none';
+        setDisplay('form-loading-overlay', 'none');
         showMessage('Error loading configuration: ' + error.message, 'error');
         console.error('Load error:', error);
+        return null;
     }
 }
 
 /**
  * Save configuration to device
  * @param {Event} event - Form submit event
+ * @param {boolean} reboot - Whether to reboot after saving
  */
-async function saveConfig(event) {
-    event.preventDefault();
-    
+async function saveConfig(config, reboot = true) {
     // Check if in captive portal and show warning (only once)
     if (isInCaptivePortal() && !window.captivePortalWarningShown) {
         window.captivePortalWarningShown = true;
         showCaptivePortalWarning();
         return;
     }
-    
-    const formData = new FormData(event.target);
-    const config = {
-        wifi_ssid: formData.get('wifi_ssid'),
-        wifi_password: formData.get('wifi_password'),
-        device_name: formData.get('device_name'),
-        fixed_ip: formData.get('fixed_ip'),
-        subnet_mask: formData.get('subnet_mask'),
-        gateway: formData.get('gateway'),
-        dns1: formData.get('dns1'),
-        dns2: formData.get('dns2'),
-        dummy_setting: formData.get('dummy_setting')
-    };
     
     // Validate required fields
     if (!config.wifi_ssid || config.wifi_ssid.trim() === '') {
@@ -419,18 +402,23 @@ async function saveConfig(event) {
         }
     }
     
-    const currentDeviceName = document.getElementById('device_name').value;
+    const deviceNameEl = document.getElementById('device_name');
+    const currentDeviceName = deviceNameEl ? deviceNameEl.value : null;
     
-    // Show overlay immediately
-    showRebootDialog({
-        title: 'Saving Configuration',
-        message: 'Saving configuration...',
-        context: 'save',
-        newDeviceName: currentDeviceName
-    });
+    // Show appropriate feedback
+    if (reboot) {
+        showRebootDialog({
+            title: 'Saving Configuration',
+            message: 'Saving configuration...',
+            context: 'save',
+            newDeviceName: currentDeviceName
+        });
+    } else {
+        showMessage('Saving configuration...', 'info');
+    }
     
     try {
-        const response = await fetch(API_CONFIG, {
+        const response = await fetch(API_CONFIG + '?reboot=' + (reboot ? 'true' : 'false'), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -444,16 +432,19 @@ async function saveConfig(event) {
         
         const result = await response.json();
         if (result.success) {
-            // Update dialog message
-            document.getElementById('reboot-message').textContent = 'Configuration saved. Device is rebooting...';
+            if (reboot) {
+                document.getElementById('reboot-message').textContent = 'Configuration saved. Device is rebooting...';
+            } else {
+                showMessage('Configuration saved successfully', 'success');
+            }
         }
     } catch (error) {
-        // If save request fails (e.g., device already rebooting), assume success
-        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        if (reboot && (error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
             document.getElementById('reboot-message').textContent = 'Configuration saved. Device is rebooting...';
         } else {
-            // Hide overlay and show error
-            document.getElementById('reboot-overlay').style.display = 'none';
+            if (reboot) {
+                document.getElementById('reboot-overlay').style.display = 'none';
+            }
             showMessage('Error saving configuration: ' + error.message, 'error');
             console.error('Save error:', error);
         }
@@ -545,17 +536,18 @@ async function resetConfig() {
  * @param {Event} event - File input change event
  */
 function handleFileSelect(event) {
-    selectedFile = event.target.files[0];
-    const uploadBtn = document.getElementById('upload-btn');
+    state.selectedFile = event.target.files[0];
+    const uploadBtn = $('upload-btn');
+    if (!uploadBtn) return;
     
-    if (selectedFile && selectedFile.name.endsWith('.bin')) {
+    if (state.selectedFile && state.selectedFile.name.endsWith('.bin')) {
         uploadBtn.disabled = false;
-        showMessage(`Selected: ${selectedFile.name} (${(selectedFile.size / 1024).toFixed(1)} KB)`, 'info');
+        showMessage(`Selected: ${state.selectedFile.name} (${(state.selectedFile.size / 1024).toFixed(1)} KB)`, 'info');
     } else {
         uploadBtn.disabled = true;
-        if (selectedFile) {
+        if (state.selectedFile) {
             showMessage('Please select a .bin file', 'error');
-            selectedFile = null;
+            state.selectedFile = null;
         }
     }
 }
@@ -588,10 +580,10 @@ async function uploadFirmware() {
     const progressFill = document.getElementById('reboot-progress-fill');
     const progressText = document.getElementById('reboot-progress-text');
     const progressContainer = document.getElementById('reboot-progress-container');
-    const reconnectStatus = document.getElementById('reconnect-status');
+    const reconnectStatus = $('reconnect-status');
     
     const formData = new FormData();
-    formData.append('firmware', selectedFile);
+    formData.append('firmware', state.selectedFile);
     
     const xhr = new XMLHttpRequest();
     
@@ -684,29 +676,6 @@ async function uploadFirmware() {
     xhr.open('POST', API_UPDATE);
     xhr.send(formData);
 }
-
-
-
-/**
- * Initialize page on DOM ready
- */
-document.addEventListener('DOMContentLoaded', () => {
-    // Attach event handlers
-    document.getElementById('config-form').addEventListener('submit', saveConfig);
-    document.getElementById('reboot-btn').addEventListener('click', rebootDevice);
-    document.getElementById('reset-btn').addEventListener('click', resetConfig);
-    document.getElementById('firmware-file').addEventListener('change', handleFileSelect);
-    document.getElementById('upload-btn').addEventListener('click', uploadFirmware);
-    document.getElementById('device_name').addEventListener('input', updateSanitizedName);
-    
-    // Load initial data
-    loadMode();
-    loadConfig();
-    loadVersion();
-    
-    // Initialize health widget
-    initHealthWidget();
-});
 
 // ===== HEALTH WIDGET =====
 
@@ -845,4 +814,120 @@ function initHealthWidget() {
             updateHealth();
         }
     }, 10000);
+}
+
+/**
+ * Initialize common functionality for all pages
+ * @param {string} currentPage - Current page identifier ('index', 'network', 'update')
+ */
+function initCommon(currentPage) {
+    // Load portal mode and version info
+    loadMode();
+    loadVersion();
+    
+    // Initialize navigation
+    initNavigation(currentPage);
+    
+    // Initialize health widget
+    initHealthWidget();
+}
+
+function initNavigation(currentPage) {
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+        if (state.portalMode === 'core' && tab.dataset.page !== 'network') {
+            tab.classList.add('disabled');
+        }
+    });
+    
+    if (state.portalMode === 'core' && currentPage === 'index') {
+        window.location.href = '/network.html';
+    }
+}
+
+async function initNetworkPage() {
+    await loadConfig();
+    
+    // Helper to build config from form + state.config
+    const buildConfig = () => {
+        const config = {...state.config}; // Clone loaded config
+        config.wifi_ssid = $('wifi_ssid')?.value || '';
+        const pwd = $('wifi_password')?.value || '';
+        if (pwd) config.wifi_password = pwd; // Only update if provided
+        config.device_name = $('device_name')?.value || '';
+        config.fixed_ip = $('fixed_ip')?.value || '';
+        config.subnet_mask = $('subnet_mask')?.value || '';
+        config.gateway = $('gateway')?.value || '';
+        config.dns1 = $('dns1')?.value || '';
+        config.dns2 = $('dns2')?.value || '';
+        return config;
+    };
+    
+    const form = $('config-form');
+    if (form) {
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            saveConfig(buildConfig(), true);
+        });
+    }
+    
+    const saveOnlyBtn = $('save-only-btn');
+    if (saveOnlyBtn) {
+        saveOnlyBtn.addEventListener('click', () => saveConfig(buildConfig(), false));
+    }
+    
+    const rebootBtn = $('reboot-btn');
+    if (rebootBtn) {
+        rebootBtn.addEventListener('click', rebootDevice);
+    }
+    
+    const deviceNameInput = $('device_name');
+    if (deviceNameInput) {
+        deviceNameInput.addEventListener('input', updateSanitizedName);
+    }
+}
+
+function initUpdatePage() {
+    const fileInput = $('firmware-file');
+    if (fileInput) {
+        fileInput.addEventListener('change', handleFileSelect);
+    }
+    
+    const uploadBtn = $('upload-btn');
+    if (uploadBtn) {
+        uploadBtn.addEventListener('click', uploadFirmware);
+    }
+    
+    const resetBtn = $('reset-btn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', resetConfig);
+    }
+}
+
+async function initIndexPage() {
+    await loadConfig();
+    
+    // Helper to build config with only dummy_setting updated
+    const buildConfig = () => {
+        const config = {...state.config}; // Clone loaded config
+        config.dummy_setting = $('dummy_setting')?.value || '';
+        return config;
+    };
+    
+    const form = $('config-form');
+    if (form) {
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            saveConfig(buildConfig(), true);
+        });
+    }
+    
+    const saveOnlyBtn = $('save-only-btn');
+    if (saveOnlyBtn) {
+        saveOnlyBtn.addEventListener('click', () => saveConfig(buildConfig(), false));
+    }
+    
+    const rebootBtn = $('reboot-btn');
+    if (rebootBtn) {
+        rebootBtn.addEventListener('click', rebootDevice);
+    }
 }

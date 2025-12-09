@@ -27,6 +27,8 @@
 
 // Forward declarations
 void handleRoot(AsyncWebServerRequest *request);
+void handleNetworkPage(AsyncWebServerRequest *request);
+void handleUpdatePage(AsyncWebServerRequest *request);
 void handleCSS(AsyncWebServerRequest *request);
 void handleJS(AsyncWebServerRequest *request);
 void handleGetConfig(AsyncWebServerRequest *request);
@@ -61,11 +63,11 @@ static unsigned long last_cpu_check = 0;
 
 // ===== WEB SERVER HANDLERS =====
 
-// Serve portal HTML
+// Serve index page (root)
 void handleRoot(AsyncWebServerRequest *request) {
     AsyncWebServerResponse *response = request->beginResponse(200, "text/html", 
-                                                               portal_html_gz, 
-                                                               portal_html_gz_len);
+                                                               index_html_gz, 
+                                                               index_html_gz_len);
     response->addHeader("Content-Encoding", "gzip");
     request->send(response);
 }
@@ -84,6 +86,24 @@ void handleJS(AsyncWebServerRequest *request) {
     AsyncWebServerResponse *response = request->beginResponse(200, "application/javascript", 
                                                                portal_js_gz, 
                                                                portal_js_gz_len);
+    response->addHeader("Content-Encoding", "gzip");
+    request->send(response);
+}
+
+// Serve network page
+void handleNetworkPage(AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", 
+                                                               network_html_gz, 
+                                                               network_html_gz_len);
+    response->addHeader("Content-Encoding", "gzip");
+    request->send(response);
+}
+
+// Serve update page
+void handleUpdatePage(AsyncWebServerRequest *request) {
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", 
+                                                               update_html_gz, 
+                                                               update_html_gz_len);
     response->addHeader("Content-Encoding", "gzip");
     request->send(response);
 }
@@ -190,14 +210,26 @@ void handlePostConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len,
         return;
     }
     
+    // Check if we should reboot after saving
+    bool shouldReboot = true;
+    if (request->hasParam("reboot")) {
+        String rebootParam = request->getParam("reboot")->value();
+        shouldReboot = (rebootParam == "true");
+    }
+    
     // Save to NVS
     if (config_manager_save(current_config)) {
-        Logger.logMessage("Portal", "Config saved - rebooting");
-        request->send(200, "application/json", "{\"success\":true,\"message\":\"Configuration saved\"}");
-        
-        // Schedule reboot after response is sent
-        delay(100);
-        ESP.restart();
+        if (shouldReboot) {
+            Logger.logMessage("Portal", "Config saved - rebooting");
+            request->send(200, "application/json", "{\"success\":true,\"message\":\"Configuration saved\"}");
+            
+            // Schedule reboot after response is sent
+            delay(100);
+            ESP.restart();
+        } else {
+            Logger.logMessage("Portal", "Config saved (no reboot)");
+            request->send(200, "application/json", "{\"success\":true,\"message\":\"Configuration saved\"}");
+        }
     } else {
         Logger.logMessage("Portal", "Config save failed");
         request->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to save\"}");
@@ -506,7 +538,12 @@ void web_portal_init(DeviceConfig *config) {
         delay(100);
     }
 
+    // HTML pages
     server->on("/", HTTP_GET, handleRoot);
+    server->on("/network.html", HTTP_GET, handleNetworkPage);
+    server->on("/update.html", HTTP_GET, handleUpdatePage);
+    
+    // Static assets
     server->on("/portal.css", HTTP_GET, handleCSS);
     server->on("/portal.js", HTTP_GET, handleJS);
     

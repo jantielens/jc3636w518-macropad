@@ -37,6 +37,14 @@ if [ ! -d "$WEB_DIR" ]; then
     exit 1
 fi
 
+# Build HTML pages from components (if build script exists)
+BUILD_HTML_SCRIPT="$SCRIPT_DIR/build-html-pages.sh"
+if [ -f "$BUILD_HTML_SCRIPT" ]; then
+    echo "Building HTML pages from components..."
+    bash "$BUILD_HTML_SCRIPT"
+    echo
+fi
+
 # Discover source files
 HTML_FILES=($(find "$WEB_DIR" -maxdepth 1 -name "*.html" -type f | sort))
 CSS_FILES=($(find "$WEB_DIR" -maxdepth 1 -name "*.css" -type f | sort))

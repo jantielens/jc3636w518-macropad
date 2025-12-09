@@ -78,6 +78,49 @@ h1 {
     background: rgba(7, 133, 39, 0.9);
 }
 
+/* Navigation Tabs */
+.nav-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+    background: white;
+    padding: 8px;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.nav-tab {
+    flex: 1;
+    padding: 12px 20px;
+    text-align: center;
+    text-decoration: none;
+    color: #1d1d1f;
+    font-weight: 500;
+    font-size: 15px;
+    border-radius: 8px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+}
+
+.nav-tab:hover {
+    background: #f5f5f7;
+}
+
+.nav-tab.active {
+    background: linear-gradient(135deg, #007aff 0%, #0051d5 100%);
+    color: white;
+}
+
+.nav-tab.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: auto;
+}
+
+.nav-tab.disabled:hover {
+    background: transparent;
+}
+
 /* Status Message */
 .message {
     position: fixed;

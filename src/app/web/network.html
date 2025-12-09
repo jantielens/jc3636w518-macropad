@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{PROJECT_DISPLAY_NAME}} Configuration Portal</title>
+    <title>{{PROJECT_DISPLAY_NAME}} - Network</title>
     <link rel="stylesheet" href="/portal.css">
+    <script src="/portal.js"></script>
 </head>
 <body>
     <div class="container">
@@ -20,6 +21,12 @@
             </div>
         </header>
 
+        <nav class="nav-tabs" data-current-page="network">
+            <a href="/" class="nav-tab " data-page="index">Macropad</a>
+            <a href="/network.html" class="nav-tab active" data-page="network">Network</a>
+            <a href="/update.html" class="nav-tab " data-page="update">Update</a>
+        </nav>
+
         <div id="status-message" class="message" style="display:none;"></div>
 
         <div id="form-loading-overlay" class="form-loading-overlay">
@@ -28,8 +35,7 @@
         </div>
 
         <form id="config-form">
-            <!-- Core Settings Section (always visible) -->
-            <section class="section core-section">
+            <section class="section">
                 <h2>📶 WiFi Settings</h2>
                 <div class="form-group">
                     <label for="wifi_ssid">WiFi SSID</label>
@@ -43,7 +49,7 @@
                 </div>
             </section>
 
-            <section class="section core-section">
+            <section class="section">
                 <h2>🔧 Device Settings</h2>
                 <div class="form-group">
                     <label for="device_name">Device Name</label>
@@ -57,7 +63,7 @@
                 </div>
             </section>
 
-            <section class="section core-section">
+            <section class="section">
                 <h2>🌐 Network Configuration (Optional)</h2>
                 <div class="form-group">
                     <label for="fixed_ip">Fixed IP Address</label>
@@ -86,34 +92,22 @@
                 </div>
             </section>
 
-            <!-- Additional Settings Section (hidden in core mode) -->
-            <section class="section full-section" id="additional-settings" style="display:none;">
-                <h2>⚙️ Additional Settings</h2>
-                <div class="form-group">
-                    <label for="dummy_setting">Dummy Setting</label>
-                    <input type="text" id="dummy_setting" name="dummy_setting" maxlength="63">
-                    <small>Example setting for demonstration</small>
-                </div>
-            </section>
-
             <section class="section">
                 <div class="button-group">
-                    <button type="submit" class="btn btn-primary">Save and Reboot</button>
-                    <button type="button" id="reboot-btn" class="btn btn-secondary">Reboot (without saving)</button>
-                    <button type="button" id="reset-btn" class="btn btn-danger">Factory Reset</button>
+                    <button type="submit" class="btn btn-primary">Save & Reboot</button>
+                    <button type="button" id="save-only-btn" class="btn btn-secondary">Save Only</button>
+                    <button type="button" id="reboot-btn" class="btn btn-secondary">Reboot</button>
                 </div>
             </section>
         </form>
 
-        <section class="section ota-section">
-            <h2>📦 Firmware Update (OTA)</h2>
-            <div class="form-group">
-                <label for="firmware-file">Upload Firmware (.bin)</label>
-                <input type="file" id="firmware-file" accept=".bin" class="file-input">
-                <small>Upload app.ino.bin from build directory</small>
-            </div>
-            <button type="button" id="upload-btn" class="btn btn-warning" disabled>Upload Firmware</button>
-        </section>
+    <script>
+        const currentPage = 'network';
+        document.addEventListener('DOMContentLoaded', () => {
+            initCommon(currentPage);
+            initNetworkPage();
+        });
+    </script>
 
         <footer>
             <p id="build-info" class="small">Loading build info...</p>
@@ -214,7 +208,5 @@
             <div id="reconnect-status" class="reconnect-status"></div>
         </div>
     </div>
-
-    <script src="/portal.js"></script>
 </body>
 </html>

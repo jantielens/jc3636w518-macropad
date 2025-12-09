@@ -1,0 +1,34 @@
+
+    <div id="captive-portal-warning" class="reboot-overlay" style="display:none;">
+        <div class="reboot-modal">
+            <h2>Reconnection Required</h2>
+            <p>After saving, this captive portal window will close when the device reboots.</p>
+            <p style="margin: 20px 0;">To access the device again, open your browser and go to:</p>
+            <div style="margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 8px; border: 2px solid #667eea;">
+                <code id="device-mdns-address" style="font-size: 18px; color: #667eea; font-weight: 600;">http://device.local</code>
+            </div>
+            <p class="small" style="color: #666; margin-bottom: 20px;">Tip: Save this address or bookmark it for easy access</p>
+            <div style="display: flex; gap: 10px; justify-content: center; margin-top: 25px;">
+                <button id="continue-save-btn" class="btn btn-primary" style="width: auto; min-width: 150px;">Continue and Save</button>
+                <button id="cancel-save-btn" class="btn" style="width: auto; min-width: 100px;">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="reboot-overlay" class="reboot-overlay" style="display:none;">
+        <div class="reboot-modal">
+            <div id="reboot-spinner" class="spinner"></div>
+            <h2 id="reboot-title">Device Rebooting</h2>
+            <p id="reboot-message">Please wait while the device restarts...</p>
+            <div id="reboot-progress-container" style="margin: 25px 0; display: none;">
+                <div class="progress-bar" style="height: 30px; background: #e0e0e0; border-radius: 15px; overflow: hidden;">
+                    <div id="reboot-progress-fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); transition: width 0.3s;"></div>
+                </div>
+                <div id="reboot-progress-text" style="margin-top: 10px; font-size: 18px; font-weight: 600; color: #667eea;">0%</div>
+            </div>
+            <p id="reboot-submessage" class="small">This page will automatically refresh when ready</p>
+            <div id="reconnect-status" class="reconnect-status"></div>
+        </div>
+    </div>
+</body>
+</html>

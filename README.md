@@ -62,10 +62,22 @@ jc3636w518-macropad/
 │   │   │   ├── ui_events.h/cpp        # FreeRTOS event system
 │   │   │   └── screens/
 │   │   │       └── splash_screen.h/cpp # Boot splash screen
-│   │   └── web/
-│   │       ├── portal.html        # Portal interface
-│   │       ├── portal.css         # Styles
-│   │       └── portal.js          # Client logic
+│   │   └── web/                   # Web portal sources
+│   │       ├── index.html             # Generated: Macropad page
+│   │       ├── network.html           # Generated: Network config page
+│   │       ├── update.html            # Generated: Update & reset page
+│   │       ├── portal.css             # Shared styles
+│   │       ├── portal.js              # Shared client logic
+│   │       ├── shared/                # Reusable components
+│   │       │   ├── header.html        # Page header with badges
+│   │       │   ├── nav.html           # Navigation tabs
+│   │       │   ├── footer.html        # Page footer
+│   │       │   ├── health-widget.html # Health monitoring widget
+│   │       │   └── reboot-overlay.html# Reboot/reconnection dialogs
+│   │       └── pages/                 # Page-specific content
+│   │           ├── index-content.html # Macropad settings form
+│   │           ├── network-content.html# Network settings form
+│   │           └── update-content.html# OTA upload & factory reset
 │   ├── boards/
 │   │   └── jc3636w518/            # JC3636W518-specific configuration
 │   │       ├── board_config.h         # Display dimensions, flags
@@ -75,6 +87,7 @@ jc3636w518-macropad/
 │   │       └── display_driver.cpp     # ST77916 LCD + CST816S touch driver
 │   └── version.h                  # Firmware version tracking
 ├── tools/
+│   ├── build-html-pages.sh        # Assemble HTML from components
 │   ├── minify-web-assets.sh       # Web asset minification & embedding
 │   └── extract-changelog.sh       # Extract release notes
 ├── .github/
@@ -114,18 +127,34 @@ Access the configuration portal at:
 - **AP Mode** (no WiFi configured): `http://192.168.4.1`
 - **Connected Mode**: `http://[device-ip]` or `http://[hostname].local`
 
+### Multi-Page Portal
+
+The portal has 3 pages with consistent navigation:
+
+| Page | URL | Purpose |
+|------|-----|----------|
+| **Macropad** | `/` | Macropad-specific settings |
+| **Network** | `/network.html` | WiFi, device name, IP configuration |
+| **Update** | `/update.html` | OTA firmware updates, factory reset |
+
+**Standardized Controls:**
+All configuration pages include:
+- **Save & Reboot** - Save changes and restart device
+- **Save Only** - Save without restarting (instant apply)
+- **Reboot** - Restart without saving changes
+
 ### REST API Endpoints
 
-| Method | Endpoint | Purpose |
-|--------|----------|----------|
-| GET | `/api/info` | Device info (firmware, chip, cores, flash, PSRAM, hostname, MAC) |
-| GET | `/api/health` | Real-time health stats (CPU, memory, WiFi, uptime, hostname) |
-| GET | `/api/config` | Current configuration |
-| POST | `/api/config` | Save configuration (triggers reboot) |
-| DELETE | `/api/config` | Reset to defaults (triggers reboot) |
-| GET | `/api/mode` | Portal mode (core vs full) |
-| POST | `/api/update` | OTA firmware upload |
-| POST | `/api/reboot` | Reboot device |
+| Method | Endpoint | Query Params | Purpose |
+|--------|----------|--------------|----------|
+| GET | `/api/info` | - | Device info (firmware, chip, cores, flash, PSRAM, hostname, MAC) |
+| GET | `/api/health` | - | Real-time health stats (CPU, memory, WiFi, uptime, hostname) |
+| GET | `/api/config` | - | Current configuration |
+| POST | `/api/config` | `?reboot=true/false` | Save configuration (reboot optional) |
+| DELETE | `/api/config` | - | Reset to defaults (triggers reboot) |
+| GET | `/api/mode` | - | Portal mode (core vs full) |
+| POST | `/api/update` | - | OTA firmware upload |
+| POST | `/api/reboot` | - | Reboot device |
 
 See [docs/web-portal.md](docs/web-portal.md) for detailed guide.
 
