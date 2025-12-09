@@ -1,0 +1,30 @@
+# ESP32-S3 Custom Partition Table for JC3636W518 Macropad
+# App partitions must be aligned to 64KB (0x10000) boundaries
+# This matches ESP32 standard partition layout
+#
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  factory, 0x10000,  0x3E0000,
+spiffs,   data, spiffs,  0x3F0000, 0x10000,
+
+# Partition Breakdown:
+# - nvs (20KB):       Configuration storage (standard ESP32 size)
+# - otadata (8KB):    OTA data partition (required size, reserved for future)
+# - app0 (3.875MB):   Main firmware application (factory type, no OTA for now)
+# - spiffs (64KB):    Filesystem for logs and optional assets
+#
+# Total: 4MB used out of 16MB flash
+# Remaining: 12MB available for future expansion
+#
+# NVS Capacity Analysis:
+# - 20KB NVS - overhead ≈ 18KB usable
+# - Device config: ~500 bytes
+# - MacroPad config: 10 screens × 2920 bytes = 29.2KB
+# - Result: 18KB < 29.7KB required → TOO SMALL FOR 10 SCREENS
+# - Maximum screens with 20KB NVS: ~6 screens (17.5KB config)
+#
+# DECISION NEEDED: With standard ESP32 partition layout, we can support:
+# - 6 screens max (fits in 20KB NVS)
+# - OR optimize config structure to reduce per-screen size
+# - OR use non-standard NVS placement (complex, not recommended)

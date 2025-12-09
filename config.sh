@@ -48,8 +48,9 @@ PROJECT_DISPLAY_NAME="JC3636W518 Macropad"
 declare -A FQBN_TARGETS=(
     # ESP32-S3 round display board (JC3636W518)
     # CDCOnBoot enables USB serial (appears as /dev/ttyACM*). Adjust if needed.
+    # PartitionScheme=custom uses partitions.csv (32KB NVS for 10 macropad screens)
     # Include official menu options to ensure correct partition size and PSRAM/flash settings.
-    ["esp32:esp32:esp32s3:CDCOnBoot=cdc,PartitionScheme=huge_app,PSRAM=opi,FlashSize=16M,FlashMode=qio120"]="jc3636w518"
+    ["esp32:esp32:esp32s3:CDCOnBoot=cdc,PartitionScheme=custom,PSRAM=opi,FlashSize=16M,FlashMode=qio120"]="jc3636w518"
 )
 
 # Default board (used when only one board is configured)
