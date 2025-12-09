@@ -193,12 +193,21 @@ static bool lookupModifier(const String& name, uint8_t* code) {
 // Action Executors
 // ============================================================================
 
-// Execute plain text (types character by character)
+// Execute plain text (types character by character with delay for BLE stability)
 static bool executePlainText(const String& text) {
     if (text.length() == 0) return true;
     
     Logger.logMessagef("Keystroke", "Type: '%s'", text.c_str());
-    g_keyboard->write((const uint8_t*)text.c_str(), text.length());
+    
+    // Type each character individually with a small delay for BLE keyboard
+    // BLE needs time to process each keypress/release cycle
+    for (size_t i = 0; i < text.length(); i++) {
+        g_keyboard->write(text[i]);
+        if (i < text.length() - 1) {  // No delay after last character
+            delay(10);  // 10ms between characters
+        }
+    }
+    
     return true;
 }
 

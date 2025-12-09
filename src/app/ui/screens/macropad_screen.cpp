@@ -7,6 +7,7 @@
 #include "macropad_screen.h"
 #include "../../log_manager.h"
 #include "../../BleKeyboard.h"
+#include "../../keystrokes_handler.h"
 #include "../screen_manager.h"
 #include <lvgl.h>
 #include <cmath>
@@ -259,11 +260,15 @@ void MacroPadScreen::handleButtonPress(lv_obj_t* btn) {
   // Handle action based on type
   switch (btn_config.action_type) {
     case ACTION_KEYSTROKES:
-      Logger.logMessage("MacroPad", "  -> Sending hardcoded 'a' keypress");
-      if (bleKeyboard && bleKeyboard->isConnected()) {
-        bleKeyboard->write('a');
+      if (strlen(btn_config.keystrokes) > 0) {
+        Logger.logMessagef("MacroPad", "  -> Executing keystrokes: '%s'", btn_config.keystrokes);
+        if (keystrokes_handler_execute(btn_config.keystrokes)) {
+          Logger.logMessage("MacroPad", "  -> Keystrokes sent successfully");
+        } else {
+          Logger.logMessage("MacroPad", "  -> Failed to send keystrokes (BLE not connected or parse error)");
+        }
       } else {
-        Logger.logMessage("MacroPad", "  -> BLE keyboard not connected!");
+        Logger.logMessage("MacroPad", "  -> No keystrokes configured for this button");
       }
       break;
       

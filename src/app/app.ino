@@ -164,17 +164,26 @@ void setup()
   
   // Initialize macropad configuration manager
   macro_pad_manager_init();
-  if (macro_pad_manager_load()) {
+  
+  // TEMPORARY: Force recreation of test configs during development
+  // Set to false to use saved configs from flash
+  bool force_recreate_test_configs = true;
+  
+  if (!force_recreate_test_configs && macro_pad_manager_load()) {
     Logger.logMessagef("Main", "Loaded %d macropad configs", macro_pad_manager_count());
   } else {
-    Logger.logMessage("Main", "No macropad configs found (first boot)");
+    if (force_recreate_test_configs) {
+      Logger.logMessage("Main", "Force recreating test configs (development mode)");
+    } else {
+      Logger.logMessage("Main", "No macropad configs found (first boot)");
+    }
     
-    // Create test configurations on first boot (heap allocation to avoid stack overflow)
+    // Create test configurations (heap allocation to avoid stack overflow)
     Logger.logMessage("Main", "Creating test macropad configs");
     
     MacroPad* pad = new MacroPad();
     
-    // Test Config 1: RADIAL layout
+    // Test Config 1: RADIAL layout with diverse keystroke examples
     memset(pad, 0, sizeof(MacroPad));
     pad->id = 0;
     strlcpy(pad->name, "Test Radial", sizeof(pad->name));
@@ -182,7 +191,48 @@ void setup()
     pad->button_count = 9;
     pad->enabled = true;
     
-    for (int i = 0; i <= 6; i++) {
+    // Button 0 (center): Type "hello"
+    pad->buttons[0].position = 0;
+    pad->buttons[0].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[0].label, "Hello", sizeof(pad->buttons[0].label));
+    pad->buttons[0].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[0].keystrokes, "hello", sizeof(pad->buttons[0].keystrokes));
+    pad->buttons[0].enabled = true;
+    
+    // Button 1: Copy (Ctrl+C)
+    pad->buttons[1].position = 1;
+    pad->buttons[1].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[1].label, "Copy", sizeof(pad->buttons[1].label));
+    pad->buttons[1].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[1].keystrokes, "ctrl+c", sizeof(pad->buttons[1].keystrokes));
+    pad->buttons[1].enabled = true;
+    
+    // Button 2: Paste (Ctrl+V)
+    pad->buttons[2].position = 2;
+    pad->buttons[2].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[2].label, "Paste", sizeof(pad->buttons[2].label));
+    pad->buttons[2].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[2].keystrokes, "ctrl+v", sizeof(pad->buttons[2].keystrokes));
+    pad->buttons[2].enabled = true;
+    
+    // Button 3: Volume Up
+    pad->buttons[3].position = 3;
+    pad->buttons[3].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[3].label, "Vol+", sizeof(pad->buttons[3].label));
+    pad->buttons[3].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[3].keystrokes, "{volumeup}", sizeof(pad->buttons[3].keystrokes));
+    pad->buttons[3].enabled = true;
+    
+    // Button 4: Volume Down
+    pad->buttons[4].position = 4;
+    pad->buttons[4].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[4].label, "Vol-", sizeof(pad->buttons[4].label));
+    pad->buttons[4].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[4].keystrokes, "{volumedown}", sizeof(pad->buttons[4].keystrokes));
+    pad->buttons[4].enabled = true;
+    
+    // Buttons 5-6: Simple 'a' keypress (fallback tests)
+    for (int i = 5; i <= 6; i++) {
       pad->buttons[i].position = i;
       pad->buttons[i].label_type = LABEL_TEXT;
       snprintf(pad->buttons[i].label, sizeof(pad->buttons[i].label), "Btn %d", i);
@@ -191,12 +241,14 @@ void setup()
       pad->buttons[i].enabled = true;
     }
     
+    // Button 7: Navigate Home
     pad->buttons[7].position = 7;
     pad->buttons[7].label_type = LABEL_TEXT;
     strlcpy(pad->buttons[7].label, "Home", sizeof(pad->buttons[7].label));
     pad->buttons[7].action_type = ACTION_NAV_HOME;
     pad->buttons[7].enabled = true;
     
+    // Button 8: Navigate Next
     pad->buttons[8].position = 8;
     pad->buttons[8].label_type = LABEL_TEXT;
     strlcpy(pad->buttons[8].label, "Next", sizeof(pad->buttons[8].label));
@@ -206,7 +258,7 @@ void setup()
     macro_pad_manager_add(pad);
     Logger.logMessage("Main", "  Created Test Radial (9 buttons)");
     
-    // Test Config 2: GRID layout
+    // Test Config 2: GRID layout with diverse keystroke examples
     memset(pad, 0, sizeof(MacroPad));
     pad->id = 1;
     strlcpy(pad->name, "Test Grid", sizeof(pad->name));
@@ -214,7 +266,48 @@ void setup()
     pad->button_count = 9;
     pad->enabled = true;
     
-    for (int i = 0; i <= 6; i++) {
+    // Button 0: Type "hello"
+    pad->buttons[0].position = 0;
+    pad->buttons[0].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[0].label, "Hello", sizeof(pad->buttons[0].label));
+    pad->buttons[0].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[0].keystrokes, "hello", sizeof(pad->buttons[0].keystrokes));
+    pad->buttons[0].enabled = true;
+    
+    // Button 1: Copy (Ctrl+C)
+    pad->buttons[1].position = 1;
+    pad->buttons[1].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[1].label, "Copy", sizeof(pad->buttons[1].label));
+    pad->buttons[1].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[1].keystrokes, "ctrl+c", sizeof(pad->buttons[1].keystrokes));
+    pad->buttons[1].enabled = true;
+    
+    // Button 2: Paste (Ctrl+V)
+    pad->buttons[2].position = 2;
+    pad->buttons[2].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[2].label, "Paste", sizeof(pad->buttons[2].label));
+    pad->buttons[2].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[2].keystrokes, "ctrl+v", sizeof(pad->buttons[2].keystrokes));
+    pad->buttons[2].enabled = true;
+    
+    // Button 3: Volume Up
+    pad->buttons[3].position = 3;
+    pad->buttons[3].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[3].label, "Vol+", sizeof(pad->buttons[3].label));
+    pad->buttons[3].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[3].keystrokes, "{volumeup}", sizeof(pad->buttons[3].keystrokes));
+    pad->buttons[3].enabled = true;
+    
+    // Button 4: Volume Down
+    pad->buttons[4].position = 4;
+    pad->buttons[4].label_type = LABEL_TEXT;
+    strlcpy(pad->buttons[4].label, "Vol-", sizeof(pad->buttons[4].label));
+    pad->buttons[4].action_type = ACTION_KEYSTROKES;
+    strlcpy(pad->buttons[4].keystrokes, "{volumedown}", sizeof(pad->buttons[4].keystrokes));
+    pad->buttons[4].enabled = true;
+    
+    // Buttons 5-6: Simple 'a' keypress (fallback tests)
+    for (int i = 5; i <= 6; i++) {
       pad->buttons[i].position = i;
       pad->buttons[i].label_type = LABEL_TEXT;
       snprintf(pad->buttons[i].label, sizeof(pad->buttons[i].label), "Grid %d", i);
@@ -223,12 +316,14 @@ void setup()
       pad->buttons[i].enabled = true;
     }
     
+    // Button 7: Navigate Previous
     pad->buttons[7].position = 7;
     pad->buttons[7].label_type = LABEL_TEXT;
     strlcpy(pad->buttons[7].label, "Prev", sizeof(pad->buttons[7].label));
     pad->buttons[7].action_type = ACTION_NAV_PREV;
     pad->buttons[7].enabled = true;
     
+    // Button 8: Navigate Home
     pad->buttons[8].position = 8;
     pad->buttons[8].label_type = LABEL_TEXT;
     strlcpy(pad->buttons[8].label, "Home", sizeof(pad->buttons[8].label));

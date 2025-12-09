@@ -1790,3 +1790,21 @@ Phase 9 (Polish)
 - Test on both Windows and Mac/Linux BLE hosts
 
 This phased approach ensures you can test on real hardware frequently and catch issues early!
+
+---
+
+## Deferred Features
+
+Features identified during implementation but deferred to future phases:
+
+### NAV_GOTO Action Type
+- **Description**: Navigate directly to a specific macropad screen by ID (e.g., button action jumps to screen 5)
+- **Current state**: Navigation supports NAV_HOME, NAV_NEXT, NAV_PREV only
+- **Complexity**: Medium - requires UI for selecting target screen ID in web portal
+- **Priority**: Low - current navigation sufficient for MVP
+- **Implementation notes**: 
+  - Add `ACTION_NAV_GOTO` enum value
+  - Add `uint8_t target_pad_id` field to ButtonConfig
+  - Update macropad_screen.cpp handleButtonPress() to support goto action
+  - Add target screen selector in web UI (dropdown showing available macropads)
+- **Deferred from**: Phase 5 (December 2025)
