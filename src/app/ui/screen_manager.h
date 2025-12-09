@@ -7,6 +7,7 @@
 // Simple screen IDs for navigation
 enum class ScreenId : uint8_t {
   Splash = 0,
+  Home,
   MacroPad,
   // Add more screens as needed
 };

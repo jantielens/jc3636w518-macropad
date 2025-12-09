@@ -1,12 +1,14 @@
 #include "screen_manager.h"
 #include "ui_events.h"
 #include "screens/splash_screen.h"
+#include "screens/home_screen.h"
 
 // Global instance
 ScreenManager UI;
 
 // Screen instances (allocated once)
 static SplashScreen splash_screen;
+static HomeScreen home_screen;
 // static MacroPadScreen macropad_screen; // TODO: Create this screen
 
 void ScreenManager::begin(ScreenId initial) {
@@ -16,6 +18,9 @@ void ScreenManager::begin(ScreenId initial) {
   switch (initial) {
     case ScreenId::Splash:
       current_ = &splash_screen;
+      break;
+    case ScreenId::Home:
+      current_ = &home_screen;
       break;
     case ScreenId::MacroPad:
       // current_ = &macropad_screen; // TODO: Implement
@@ -59,6 +64,9 @@ void ScreenManager::navigate(ScreenId id, lv_scr_load_anim_t anim, uint32_t time
   switch (id) {
     case ScreenId::Splash:
       next = &splash_screen;
+      break;
+    case ScreenId::Home:
+      next = &home_screen;
       break;
     case ScreenId::MacroPad:
       // next = &macropad_screen; // TODO: Implement

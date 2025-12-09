@@ -8,6 +8,7 @@
 
 #include "config_manager.h"
 #include "macro_pad_manager.h"
+#include "device_stats.h"
 #include "web_portal.h"
 #include "log_manager.h"
 #include "BleKeyboard.h"
@@ -23,6 +24,7 @@
 #include "ui/base_screen.cpp"
 #include "ui/ui_events.cpp"
 #include "ui/screens/splash_screen.cpp"
+#include "ui/screens/home_screen.cpp"
 #include "ui/screen_manager.cpp"
 #endif
 
@@ -167,6 +169,9 @@ void setup()
     Logger.logMessage("Main", "No macropad configs found (first boot)");
   }
   
+  // Initialize device stats tracking
+  device_stats_init();
+  
   if (!config_loaded) {
     // No config found - set default device name
     String default_name = config_manager_get_default_device_name();
@@ -249,8 +254,8 @@ void loop()
       unsigned long elapsed = now - splash_start_ms;
       unsigned long since_status = now - last_boot_status_ms;
       if (elapsed >= MIN_SPLASH_MS && since_status >= MIN_STATUS_DWELL_MS) {
-        Logger.logMessagef("UI", "Navigating Splash->MacroPad (elapsed=%lums, since_status=%lums)", elapsed, since_status);
-        UI.navigate(ScreenId::MacroPad, LV_SCR_LOAD_ANIM_NONE, 0, 0);
+        Logger.logMessagef("UI", "Navigating Splash->Home (elapsed=%lums, since_status=%lums)", elapsed, since_status);
+        UI.navigate(ScreenId::Home, LV_SCR_LOAD_ANIM_NONE, 0, 0);
       }
     }
   }
