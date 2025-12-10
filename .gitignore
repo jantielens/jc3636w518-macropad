@@ -2,6 +2,9 @@
 build/
 bin/arduino-cli
 
+# Icon font build cache
+tools/.cache/
+
 # Auto-generated web assets
 src/app/web_assets.h
 

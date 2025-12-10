@@ -191,10 +191,10 @@ void setup()
     pad->button_count = 9;
     pad->enabled = true;
     
-    // Button 0 (center): Type "hello"
+    // Button 0 (center): Type "hello" - ICON play
     pad->buttons[0].position = 0;
-    pad->buttons[0].label_type = LABEL_TEXT;
-    strlcpy(pad->buttons[0].label, "Hello", sizeof(pad->buttons[0].label));
+    pad->buttons[0].label_type = LABEL_ICON;
+    strlcpy(pad->buttons[0].icon, "play", sizeof(pad->buttons[0].icon));
     pad->buttons[0].action_type = ACTION_KEYSTROKES;
     strlcpy(pad->buttons[0].keystrokes, "hello", sizeof(pad->buttons[0].keystrokes));
     pad->buttons[0].enabled = true;
@@ -241,17 +241,17 @@ void setup()
       pad->buttons[i].enabled = true;
     }
     
-    // Button 7: Navigate Home
+    // Button 7: Navigate Home - ICON home
     pad->buttons[7].position = 7;
-    pad->buttons[7].label_type = LABEL_TEXT;
-    strlcpy(pad->buttons[7].label, "Home", sizeof(pad->buttons[7].label));
+    pad->buttons[7].label_type = LABEL_ICON;
+    strlcpy(pad->buttons[7].icon, "home", sizeof(pad->buttons[7].icon));
     pad->buttons[7].action_type = ACTION_NAV_HOME;
     pad->buttons[7].enabled = true;
     
-    // Button 8: Navigate Next
+    // Button 8: Navigate Next - ICON arrow-right
     pad->buttons[8].position = 8;
-    pad->buttons[8].label_type = LABEL_TEXT;
-    strlcpy(pad->buttons[8].label, "Next", sizeof(pad->buttons[8].label));
+    pad->buttons[8].label_type = LABEL_ICON;
+    strlcpy(pad->buttons[8].icon, "arrow-right", sizeof(pad->buttons[8].icon));
     pad->buttons[8].action_type = ACTION_NAV_NEXT;
     pad->buttons[8].enabled = true;
     
@@ -266,10 +266,10 @@ void setup()
     pad->button_count = 9;
     pad->enabled = true;
     
-    // Button 0: Type "hello"
+    // Button 0: Type "hello" - ICON stop
     pad->buttons[0].position = 0;
-    pad->buttons[0].label_type = LABEL_TEXT;
-    strlcpy(pad->buttons[0].label, "Hello", sizeof(pad->buttons[0].label));
+    pad->buttons[0].label_type = LABEL_ICON;
+    strlcpy(pad->buttons[0].icon, "stop", sizeof(pad->buttons[0].icon));
     pad->buttons[0].action_type = ACTION_KEYSTROKES;
     strlcpy(pad->buttons[0].keystrokes, "hello", sizeof(pad->buttons[0].keystrokes));
     pad->buttons[0].enabled = true;
@@ -316,17 +316,17 @@ void setup()
       pad->buttons[i].enabled = true;
     }
     
-    // Button 7: Navigate Previous
+    // Button 7: Navigate Previous - ICON arrow-left
     pad->buttons[7].position = 7;
-    pad->buttons[7].label_type = LABEL_TEXT;
-    strlcpy(pad->buttons[7].label, "Prev", sizeof(pad->buttons[7].label));
+    pad->buttons[7].label_type = LABEL_ICON;
+    strlcpy(pad->buttons[7].icon, "arrow-left", sizeof(pad->buttons[7].icon));
     pad->buttons[7].action_type = ACTION_NAV_PREV;
     pad->buttons[7].enabled = true;
     
-    // Button 8: Navigate Home
+    // Button 8: Navigate Home - ICON home
     pad->buttons[8].position = 8;
-    pad->buttons[8].label_type = LABEL_TEXT;
-    strlcpy(pad->buttons[8].label, "Home", sizeof(pad->buttons[8].label));
+    pad->buttons[8].label_type = LABEL_ICON;
+    strlcpy(pad->buttons[8].icon, "home", sizeof(pad->buttons[8].icon));
     pad->buttons[8].action_type = ACTION_NAV_HOME;
     pad->buttons[8].enabled = true;
     

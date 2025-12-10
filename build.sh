@@ -75,6 +75,16 @@ echo "Generating web assets..."
 "$SCRIPT_DIR/tools/minify-web-assets.sh" "$PROJECT_NAME" "$PROJECT_DISPLAY_NAME"
 echo ""
 
+# Generate icon font (once for all builds)
+if [[ -f "$SCRIPT_DIR/icons.json" ]]; then
+    echo "Generating icon font..."
+    "$SCRIPT_DIR/tools/build-icon-font.sh"
+    echo ""
+else
+    echo -e "${YELLOW}Note: icons.json not found, skipping icon font generation${NC}"
+    echo ""
+fi
+
 # Determine which boards to build
 if [[ -n "$TARGET_BOARD" ]]; then
     # Build specific board

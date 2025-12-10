@@ -79,12 +79,53 @@ Used for user-facing text and branding:
 
 ### Build Configuration
 
-The build system automatically applies project branding during compilation:
+The build system automatically applies project branding and generates assets during compilation:
 
 1. `build.sh` sources `config.sh` to get `PROJECT_NAME` and `PROJECT_DISPLAY_NAME`
 2. `tools/minify-web-assets.sh` performs template substitution in HTML files
-3. C++ `#define` statements are generated in `web_assets.h`
-4. Firmware compiles with branded values embedded
+3. `tools/build-icon-font.sh` generates icon font and lookup table from `icons.json`
+4. C++ `#define` statements are generated in `web_assets.h`
+5. Firmware compiles with branded values and icon font embedded
+
+### Icon Font Generation
+
+The build system automatically generates icon fonts from Material Design Icons:
+
+**Process**:
+1. `icons.json` defines available icons with Unicode codepoints
+2. `build-icon-font.sh` runs before compilation:
+   - Downloads Material Design Icons webfont (cached)
+   - Converts hex codepoints to UTF-8 characters
+   - Generates LVGL font file (`material_icons_48.c`)
+   - Generates icon defines header (`material_icons.h`)
+   - Generates icon lookup table (`icon_lookup.cpp`)
+3. Icons embedded in firmware for button labels
+
+**Adding New Icons**:
+
+```bash
+# 1. Add to icons.json (find codepoint at https://pictogrammers.com/library/mdi/)
+{
+  "heart": "F02D1"  # Add icon name and codepoint
+}
+
+# 2. Build (auto-generates all icon files)
+./build.sh
+
+# 3. Use in code
+pad->buttons[0].label_type = LABEL_ICON;
+strlcpy(pad->buttons[0].icon, "heart", sizeof(pad->buttons[0].icon));
+```
+
+**Generated Files** (auto-generated, do not edit manually):
+- `src/app/material_icons_48.c` - LVGL font bitmap data (~1 MB for 261 icons)
+- `src/app/material_icons.h` - UTF-8 icon defines (`#define ICON_HEART "\xf3\xb0\x8b\x91"`)
+- `src/app/icon_lookup.cpp` - Icon name to glyph lookup table
+- `docs/icon-reference.md` - Complete icon reference documentation (261 icons organized by category)
+
+**Source of Truth**: `icons.json` - single file to maintain for all icon changes
+
+**Icon Reference**: See `docs/icon-reference.md` for the complete list of all 261 available icons organized by category (Media Controls, Text Editing, Navigation, etc.)
 
 ### Board-Specific Configuration
 

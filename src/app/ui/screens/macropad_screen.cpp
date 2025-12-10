@@ -8,6 +8,8 @@
 #include "../../log_manager.h"
 #include "../../BleKeyboard.h"
 #include "../../keystrokes_handler.h"
+#include "../../icon_lookup.h"
+#include "../../material_icons.h"
 #include "../screen_manager.h"
 #include <lvgl.h>
 #include <cmath>
@@ -188,14 +190,27 @@ void MacroPadScreen::build() {
     lv_obj_set_style_border_width(btn, 0, LV_STATE_PRESSED);
     lv_obj_set_style_shadow_width(btn, 0, LV_STATE_PRESSED);
     
-    // Add label (text only for now, icons in Phase 6)
+    // Add label (text or icon)
     lv_obj_t* label = lv_label_create(btn);
-    if (btn_config.label_type == LABEL_TEXT && strlen(btn_config.label) > 0) {
+    
+    if (btn_config.label_type == LABEL_ICON && strlen(btn_config.icon) > 0) {
+      // Icon label
+      const char* icon_glyph = icon_lookup(btn_config.icon);
+      if (icon_glyph) {
+        lv_label_set_text(label, icon_glyph);
+        lv_obj_set_style_text_font(label, &material_icons_48, 0);
+      } else {
+        // Icon not found, show icon name as text
+        lv_label_set_text(label, btn_config.icon);
+      }
+    } else if (btn_config.label_type == LABEL_TEXT && strlen(btn_config.label) > 0) {
+      // Text label
       lv_label_set_text(label, btn_config.label);
     } else {
       // Placeholder for empty labels
       lv_label_set_text(label, "•");
     }
+    
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_center(label);
