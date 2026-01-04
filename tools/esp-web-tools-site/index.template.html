@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>{{PROJECT_DISPLAY_NAME}} Firmware Installer</title>
+    <link rel="stylesheet" href="./style.css" />
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  </head>
+  <body>
+    <header class="header">
+      <div class="container">
+        <h1>{{PROJECT_DISPLAY_NAME}} Firmware Installer</h1>
+        <p class="subhead">
+          Flash firmware from your browser using WebSerial (Chrome/Edge over HTTPS).
+        </p>
+        <div class="badges">
+          <a class="badge badge-link" href="{{VERSION_HREF}}" target="_blank" rel="noreferrer">Version <code>{{DISPLAY_VERSION}}</code></a>
+          <a class="badge badge-link" href="https://esphome.github.io/esp-web-tools/" target="_blank" rel="noreferrer">Powered by ESP Web Tools</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="panel">
+        <div class="panel-title">Before you flash</div>
+        <ul class="panel-list">
+          <li>Use a data-capable USB cable; some “charge-only” cables won’t work.</li>
+          <li>Close other serial monitors (Arduino IDE, PlatformIO, `monitor.sh`).</li>
+          <li>If flashing fails, try a different USB port and reconnect the board.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Select your board</div>
+        <div class="toolbar">
+          <input id="boardFilter" class="filter" type="search" placeholder="Filter boards…" autocomplete="off" />
+          <div id="boardCount" class="count"></div>
+        </div>
+
+        <div id="boards" class="boards">
+{{BOARD_ENTRIES}}
+        </div>
+      </section>
+
+      <section class="panel" id="release-notes-panel">
+        <div class="panel-title">Release notes</div>
+        <div class="panel-sub">
+          <a href="{{VERSION_HREF}}" target="_blank" rel="noreferrer">View release</a>
+          <span class="dot">•</span>
+          <a href="{{CHANGELOG_HREF}}" target="_blank" rel="noreferrer">Full changelog</a>
+        </div>
+        <div id="releaseNotes" class="release-notes markdown">Loading release notes…</div>
+      </section>
+
+      <section class="footer">
+        <p>
+          Tip: if you flashed the wrong board variant, just flash again with the correct one.
+        </p>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" defer></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
