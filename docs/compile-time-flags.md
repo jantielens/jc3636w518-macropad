@@ -12,11 +12,12 @@ This document is a template. Sections marked with `COMPILE_FLAG_REPORT` markers 
 ## Flags (generated)
 
 <!-- BEGIN COMPILE_FLAG_REPORT:FLAGS -->
-Total flags: 78
+Total flags: 80
 
 ### Features (HAS_*)
 
 - **HAS_BACKLIGHT** default: `false` — Enable backlight control (typically via PWM).
+- **HAS_BLE_KEYBOARD** default: `false` — Default: false (only enabled for boards that are known-good for NimBLE HID).
 - **HAS_BUILTIN_LED** default: `false` — Enable built-in status LED support.
 - **HAS_DISPLAY** default: `false` — Enable display + LVGL UI support.
 - **HAS_IMAGE_API** default: `false` — Enable Image API endpoints (JPEG upload/download/display).
@@ -80,6 +81,7 @@ Total flags: 78
 
 ### Limits & Tuning
 
+- **CONFIG_ASYNC_TCP_STACK_SIZE** default: `(no default)` — (The web portal defines a default, but allows per-board overrides.)
 - **IMAGE_API_DECODE_HEADROOM_BYTES** default: `(50 * 1024)` — Extra free RAM required for decoding (bytes).
 - **IMAGE_API_DEFAULT_TIMEOUT_MS** default: `10000` — Default image display timeout in milliseconds.
 - **IMAGE_API_MAX_SIZE_BYTES** default: `(100 * 1024)` — Max bytes accepted for full image uploads (JPEG).
@@ -116,13 +118,13 @@ Total flags: 78
 Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
 
 <!-- BEGIN COMPILE_FLAG_REPORT:MATRIX_FEATURES -->
-| board-name | HAS_BACKLIGHT | HAS_BUILTIN_LED | HAS_DISPLAY | HAS_IMAGE_API | HAS_MQTT | HAS_TOUCH |
-| --- | --- | --- | --- | --- | --- | --- |
-| esp32-nodisplay |  |  |  |  | ✅ |  |
-| cyd-v2 | ✅ |  | ✅ | ✅ | ✅ | ✅ |
-| esp32c3-waveshare-169-st7789v2 | ✅ | ✅ | ✅ | ✅ | ✅ |  |
-| jc3248w535 | ✅ |  | ✅ | ✅ | ✅ | ✅ |
-| jc3636w518 | ✅ |  | ✅ | ✅ | ✅ | ✅ |
+| board-name | HAS_BACKLIGHT | HAS_BLE_KEYBOARD | HAS_BUILTIN_LED | HAS_DISPLAY | HAS_IMAGE_API | HAS_MQTT | HAS_TOUCH |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| esp32-nodisplay |  |  |  |  |  | ✅ |  |
+| cyd-v2 | ✅ |  |  | ✅ | ✅ | ✅ | ✅ |
+| esp32c3-waveshare-169-st7789v2 | ✅ |  | ✅ | ✅ | ✅ | ✅ |  |
+| jc3248w535 | ✅ |  |  | ✅ | ✅ | ✅ | ✅ |
+| jc3636w518 | ✅ | ✅ |  | ✅ | ✅ | ✅ | ✅ |
 <!-- END COMPILE_FLAG_REPORT:MATRIX_FEATURES -->
 
 ## Board Matrix: Selectors (generated)
@@ -146,6 +148,10 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
   - src/app/display_manager.cpp
   - src/app/drivers/arduino_gfx_driver.cpp
   - src/app/drivers/tft_espi_driver.cpp
+- **HAS_BLE_KEYBOARD**
+  - src/app/ble_keyboard_manager.cpp
+  - src/app/ble_keyboard_manager.h
+  - src/app/board_config.h
 - **HAS_BUILTIN_LED**
   - src/app/app.ino
   - src/app/board_config.h
@@ -164,6 +170,7 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
   - src/app/screens.cpp
   - src/app/screens/lvgl_image_screen.cpp
   - src/app/screens/lvgl_image_screen.h
+  - src/app/screens/macropad_screen.cpp
   - src/app/touch_manager.cpp
   - src/app/web_portal.cpp
 - **HAS_IMAGE_API**
@@ -211,6 +218,8 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
   - src/app/board_config.h
   - src/app/touch_drivers.cpp
   - src/app/touch_manager.cpp
+- **CONFIG_ASYNC_TCP_STACK_SIZE**
+  - src/app/web_portal.cpp
 - **DISPLAY_INVERSION_ON**
   - src/app/drivers/tft_espi_driver.cpp
 - **DISPLAY_NEEDS_GAMMA_FIX**
