@@ -98,7 +98,7 @@ BleKeyboard::BleKeyboard(std::string deviceName, std::string deviceManufacturer,
 void BleKeyboard::begin(void)
 {
   NimBLEDevice::init(deviceName);
-  BLEDevice::setSecurityAuth(true, true, false);
+	NimBLEDevice::setSecurityAuth(true, true, false);
 
   NimBLEServer *pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(this);
