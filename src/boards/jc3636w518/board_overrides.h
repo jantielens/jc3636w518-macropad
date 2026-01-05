@@ -20,9 +20,19 @@
 // Enable touch support.
 #define HAS_TOUCH true
 
+// Enable BLE HID keyboard support.
+#define HAS_BLE_KEYBOARD true
+
 // Enable Image Upload API on this board
 // Enable Image API on this board.
 #define HAS_IMAGE_API true
+
+// ---------------------------------------------------------------------------
+// Networking / AsyncTCP
+// ---------------------------------------------------------------------------
+// Reduce AsyncTCP task stack a bit to reclaim internal RAM.
+// (The web portal defines a default, but allows per-board overrides.)
+#define CONFIG_ASYNC_TCP_STACK_SIZE 10240
 
 // PSRAM board: allow larger full-image uploads than the global default.
 // High-entropy JPEGs at higher quality can exceed 100KB.

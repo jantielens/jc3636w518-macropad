@@ -15,6 +15,7 @@ const API_VERSION = '/api/info'; // Used for connection polling
 const API_FIRMWARE_LATEST = '/api/firmware/latest';
 const API_FIRMWARE_UPDATE = '/api/firmware/update';
 const API_FIRMWARE_UPDATE_STATUS = '/api/firmware/update/status';
+const API_MACROS = '/api/macros';
 
 let selectedFile = null;
 let portalMode = 'full'; // 'core' or 'full'
@@ -22,6 +23,409 @@ let currentPage = 'home'; // Current page: 'home', 'network', or 'firmware'
 
 let deviceInfoCache = null;
 let githubAutoChecked = false;
+
+// ===== MACROS (Home) =====
+
+// Default (MVP) is 8 screens, but the firmware can temporarily override this
+// for debugging. The UI adapts to whatever /api/macros returns.
+const MACROS_SCREEN_COUNT_DEFAULT = 8;
+let macrosScreenCount = MACROS_SCREEN_COUNT_DEFAULT;
+const MACROS_BUTTONS_PER_SCREEN = 9;
+
+// Keep in sync with src/app/macros_config.h (char arrays include NUL terminator).
+const MACROS_LABEL_MAX = 15;
+const MACROS_SCRIPT_MAX = 255;
+const MACROS_ICON_ID_MAX = 31;
+
+let macrosPayloadCache = null; // { screens: [ { buttons: [ {label, action, script, icon_id}, ... ] }, ... ] }
+let macrosSelectedScreen = 0; // 0-based
+let macrosSelectedButton = 0; // 0-based
+let macrosDirty = false;
+let macrosLoading = false;
+
+function macrosSetDirty(dirty) {
+    macrosDirty = !!dirty;
+    const hint = document.getElementById('macros_dirty_hint');
+    if (hint) hint.style.display = macrosDirty ? 'block' : 'none';
+}
+
+function macrosCreateEmptyButton() {
+    return { label: '', action: 'none', script: '', icon_id: '' };
+}
+
+function macrosCreateEmptyPayload() {
+    const payload = { screens: [] };
+    for (let s = 0; s < macrosScreenCount; s++) {
+        const buttons = [];
+        for (let b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
+            buttons.push(macrosCreateEmptyButton());
+        }
+        payload.screens.push({ buttons });
+    }
+    return payload;
+}
+
+function macrosNormalizePayload(payload) {
+    const out = macrosCreateEmptyPayload();
+    if (!payload || !Array.isArray(payload.screens)) return out;
+
+    for (let s = 0; s < Math.min(macrosScreenCount, payload.screens.length); s++) {
+        const screen = payload.screens[s];
+        if (!screen || !Array.isArray(screen.buttons)) continue;
+
+        for (let b = 0; b < Math.min(MACROS_BUTTONS_PER_SCREEN, screen.buttons.length); b++) {
+            const btn = screen.buttons[b] || {};
+            out.screens[s].buttons[b] = {
+                label: (btn.label || ''),
+                action: (btn.action || 'none'),
+                script: (btn.script || ''),
+                icon_id: (btn.icon_id || ''),
+            };
+        }
+    }
+
+    return out;
+}
+
+function macrosClampString(value, maxLen) {
+    const s = (value || '').toString();
+    return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
+function macrosActionSupportsScript(action) {
+    return action === 'send_keys';
+}
+
+function macrosGetSelectedButton() {
+    if (!macrosPayloadCache) return null;
+    const screen = macrosPayloadCache.screens[macrosSelectedScreen];
+    if (!screen) return null;
+    return screen.buttons[macrosSelectedButton] || null;
+}
+
+function macrosSlotTitle(slotIndex) {
+    const slot = slotIndex + 1;
+    return slot === 9 ? 'Center (#9)' : `#${slot}`;
+}
+
+function macrosRenderButtonSelect() {
+    const select = document.getElementById('macro_button_select');
+    if (!select) return;
+
+    select.innerHTML = '';
+    for (let i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = macrosSlotTitle(i);
+        if (i === macrosSelectedButton) opt.selected = true;
+        select.appendChild(opt);
+    }
+}
+
+function macrosRenderScreenSelect() {
+    const select = document.getElementById('macro_screen_select');
+    if (!select) return;
+
+    if (select.options.length !== macrosScreenCount) {
+        select.innerHTML = '';
+        for (let i = 0; i < macrosScreenCount; i++) {
+            const opt = document.createElement('option');
+            opt.value = String(i);
+            opt.textContent = `Screen ${i + 1}`;
+            select.appendChild(opt);
+        }
+    }
+
+    select.value = String(macrosSelectedScreen);
+}
+
+function macrosRenderButtonGrid() {
+    const grid = document.getElementById('macro_button_grid');
+    if (!grid) return;
+    if (!macrosPayloadCache) {
+        grid.innerHTML = '';
+        return;
+    }
+
+    // 3×3 representation with the center button in the middle.
+    // Indices here are 0-based button slots.
+    const order = [0, 1, 2,
+                   7, 8, 3,
+                   6, 5, 4];
+
+    grid.innerHTML = '';
+    for (const slotIndex of order) {
+        const cfg = macrosPayloadCache.screens[macrosSelectedScreen].buttons[slotIndex];
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'macro-button';
+        btn.dataset.slot = String(slotIndex);
+
+        const title = document.createElement('div');
+        title.className = 'macro-button-title';
+        title.textContent = macrosSlotTitle(slotIndex);
+
+        const subtitle = document.createElement('div');
+        subtitle.className = 'macro-button-subtitle';
+        const label = (cfg && cfg.label) ? cfg.label : '';
+        const action = (cfg && cfg.action) ? cfg.action : 'none';
+        subtitle.textContent = label ? label : (action === 'none' ? '—' : action);
+
+        btn.appendChild(title);
+        btn.appendChild(subtitle);
+
+        if ((cfg && cfg.action) === 'none') btn.classList.add('none');
+        if (slotIndex === macrosSelectedButton) btn.classList.add('active');
+
+        btn.addEventListener('click', () => {
+            macrosSelectedButton = slotIndex;
+            macrosRenderAll();
+        });
+
+        grid.appendChild(btn);
+    }
+}
+
+function macrosRenderEditorFields() {
+    const cfg = macrosGetSelectedButton();
+    const labelEl = document.getElementById('macro_label');
+    const actionEl = document.getElementById('macro_action');
+    const scriptEl = document.getElementById('macro_script');
+    const iconEl = document.getElementById('macro_icon_id');
+
+    if (!cfg) {
+        if (labelEl) labelEl.value = '';
+        if (actionEl) actionEl.value = 'none';
+        if (scriptEl) scriptEl.value = '';
+        if (iconEl) iconEl.value = '';
+        return;
+    }
+
+    if (labelEl) labelEl.value = cfg.label || '';
+    if (actionEl) actionEl.value = cfg.action || 'none';
+    if (scriptEl) scriptEl.value = cfg.script || '';
+    if (iconEl) iconEl.value = cfg.icon_id || '';
+
+    const action = (cfg.action || 'none');
+    const scriptEnabled = macrosActionSupportsScript(action);
+
+    if (scriptEl) {
+        scriptEl.disabled = !scriptEnabled;
+        if (!scriptEnabled) scriptEl.value = '';
+    }
+
+    if (iconEl) {
+        // Keep editable so users can pre-assign stable IDs, but grey it out for None.
+        iconEl.disabled = (action === 'none');
+        if (action === 'none') iconEl.value = '';
+    }
+}
+
+function macrosRenderAll() {
+    macrosRenderScreenSelect();
+    macrosRenderButtonSelect();
+    macrosRenderButtonGrid();
+    macrosRenderEditorFields();
+}
+
+function macrosBindEditorEvents() {
+    const screenSelect = document.getElementById('macro_screen_select');
+    if (screenSelect) {
+        screenSelect.addEventListener('change', () => {
+            macrosSelectedScreen = parseInt(screenSelect.value, 10) || 0;
+            macrosSelectedButton = 0;
+            macrosRenderAll();
+        });
+    }
+
+    const buttonSelect = document.getElementById('macro_button_select');
+    if (buttonSelect) {
+        buttonSelect.addEventListener('change', () => {
+            macrosSelectedButton = parseInt(buttonSelect.value, 10) || 0;
+            macrosRenderAll();
+        });
+    }
+
+    const labelEl = document.getElementById('macro_label');
+    if (labelEl) {
+        labelEl.addEventListener('input', () => {
+            const cfg = macrosGetSelectedButton();
+            if (!cfg) return;
+            cfg.label = macrosClampString(labelEl.value, MACROS_LABEL_MAX);
+            if (labelEl.value !== cfg.label) labelEl.value = cfg.label;
+            macrosSetDirty(true);
+            macrosRenderButtonGrid();
+        });
+    }
+
+    const actionEl = document.getElementById('macro_action');
+    if (actionEl) {
+        actionEl.addEventListener('change', () => {
+            const cfg = macrosGetSelectedButton();
+            if (!cfg) return;
+            cfg.action = actionEl.value || 'none';
+
+            // Keep stored data tidy.
+            if (!macrosActionSupportsScript(cfg.action)) cfg.script = '';
+            if (cfg.action === 'none') cfg.icon_id = '';
+
+            macrosSetDirty(true);
+            macrosRenderAll();
+        });
+    }
+
+    const scriptEl = document.getElementById('macro_script');
+    if (scriptEl) {
+        scriptEl.addEventListener('input', () => {
+            const cfg = macrosGetSelectedButton();
+            if (!cfg) return;
+            cfg.script = macrosClampString(scriptEl.value, MACROS_SCRIPT_MAX);
+            if (scriptEl.value !== cfg.script) scriptEl.value = cfg.script;
+            macrosSetDirty(true);
+        });
+    }
+
+    const iconEl = document.getElementById('macro_icon_id');
+    if (iconEl) {
+        iconEl.addEventListener('input', () => {
+            const cfg = macrosGetSelectedButton();
+            if (!cfg) return;
+            cfg.icon_id = macrosClampString(iconEl.value, MACROS_ICON_ID_MAX);
+            if (iconEl.value !== cfg.icon_id) iconEl.value = cfg.icon_id;
+            macrosSetDirty(true);
+        });
+    }
+
+    const reloadBtn = document.getElementById('macros_reload_btn');
+    if (reloadBtn) {
+        reloadBtn.addEventListener('click', () => {
+            loadMacros();
+        });
+    }
+}
+
+async function loadMacros() {
+    if (macrosLoading) return;
+    const section = document.getElementById('macros-section');
+    if (!section) return;
+
+    macrosLoading = true;
+    try {
+        const response = await fetch(API_MACROS, { cache: 'no-cache' });
+        if (!response.ok) {
+            if (response.status === 404) {
+                section.style.display = 'none';
+                return;
+            }
+            throw new Error(`Failed to load macros (${response.status})`);
+        }
+
+        const payload = await response.json();
+        if (payload && Array.isArray(payload.screens) && payload.screens.length > 0) {
+            macrosScreenCount = payload.screens.length;
+        } else {
+            macrosScreenCount = MACROS_SCREEN_COUNT_DEFAULT;
+        }
+        macrosPayloadCache = macrosNormalizePayload(payload);
+        macrosSelectedScreen = 0;
+        macrosSelectedButton = 0;
+        macrosSetDirty(false);
+        macrosRenderAll();
+    } catch (error) {
+        console.error('Error loading macros:', error);
+        showMessage('Error loading macros: ' + error.message, 'error');
+        // Fall back to empty editor so UI still works.
+        macrosPayloadCache = macrosCreateEmptyPayload();
+        macrosRenderAll();
+    } finally {
+        macrosLoading = false;
+    }
+}
+
+function macrosValidatePayload(payload) {
+    if (!payload || !Array.isArray(payload.screens) || payload.screens.length !== macrosScreenCount) {
+        return { valid: false, message: `Invalid payload (expected ${macrosScreenCount} screens)` };
+    }
+    for (let s = 0; s < macrosScreenCount; s++) {
+        const screen = payload.screens[s];
+        if (!screen || !Array.isArray(screen.buttons) || screen.buttons.length !== MACROS_BUTTONS_PER_SCREEN) {
+            return { valid: false, message: `Invalid payload (screen ${s + 1} must have ${MACROS_BUTTONS_PER_SCREEN} buttons)` };
+        }
+    }
+    return { valid: true, message: 'OK' };
+}
+
+async function saveMacros(options = {}) {
+    if (!macrosPayloadCache) return;
+
+    const silent = options.silent === true;
+
+    // Normalize + clamp before sending.
+    const payload = macrosNormalizePayload(macrosPayloadCache);
+    for (let s = 0; s < macrosScreenCount; s++) {
+        for (let b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
+            const btn = payload.screens[s].buttons[b];
+            btn.label = macrosClampString(btn.label, MACROS_LABEL_MAX);
+            btn.action = (btn.action || 'none');
+            btn.script = macrosClampString(btn.script, MACROS_SCRIPT_MAX);
+            btn.icon_id = macrosClampString(btn.icon_id, MACROS_ICON_ID_MAX);
+
+            if (!macrosActionSupportsScript(btn.action)) btn.script = '';
+            if (btn.action === 'none') btn.icon_id = '';
+        }
+    }
+
+    const check = macrosValidatePayload(payload);
+    if (!check.valid) {
+        if (!silent) showMessage(check.message, 'error');
+        return false;
+    }
+
+    try {
+        const response = await fetch(API_MACROS, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.success === false) {
+            throw new Error(data.message || `Save failed (${response.status})`);
+        }
+
+        macrosPayloadCache = payload;
+        macrosSetDirty(false);
+        macrosRenderAll();
+        if (!silent) showMessage('Macros saved', 'success');
+        return true;
+    } catch (error) {
+        console.error('Error saving macros:', error);
+        if (!silent) showMessage('Error saving macros: ' + error.message, 'error');
+        return false;
+    }
+}
+
+async function saveMacrosIfNeeded(options = {}) {
+    const section = document.getElementById('macros-section');
+    if (!section || section.style.display === 'none') return true;
+    if (!macrosDirty) return true;
+    return await saveMacros({ silent: options.silent === true });
+}
+
+function initMacrosEditor() {
+    const section = document.getElementById('macros-section');
+    if (!section) return;
+
+    macrosBindEditorEvents();
+
+    // Start with an empty payload so the UI is responsive immediately.
+    // This uses the default screen count until /api/macros tells us otherwise.
+    macrosScreenCount = MACROS_SCREEN_COUNT_DEFAULT;
+    macrosPayloadCache = macrosCreateEmptyPayload();
+    macrosRenderAll();
+
+    loadMacros();
+}
 
 /**
  * Scroll input into view when focused (prevents mobile keyboard from covering it)
@@ -908,6 +1312,14 @@ async function saveConfig(event) {
         showMessage(validation.message, 'error');
         return;
     }
+
+    // Home page: persist macros as part of the same save workflow.
+    // Do this before showing the reboot overlay so we can surface errors.
+    const macrosOk = await saveMacrosIfNeeded({ silent: true });
+    if (!macrosOk) {
+        showMessage('Error saving macros (configuration not saved)', 'error');
+        return;
+    }
     
     const currentDeviceNameField = document.getElementById('device_name');
     const currentDeviceName = currentDeviceNameField ? currentDeviceNameField.value : null;
@@ -956,6 +1368,13 @@ async function saveConfig(event) {
  */
 async function saveOnly(event) {
     event.preventDefault();
+
+    // Home page: persist macros as part of the same save workflow.
+    const macrosOk = await saveMacrosIfNeeded({ silent: true });
+    if (!macrosOk) {
+        showMessage('Error saving macros (configuration not saved)', 'error');
+        return;
+    }
     
     const formData = new FormData(document.getElementById('config-form'));
     const config = extractFormFields(formData);
@@ -1384,6 +1803,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     loadVersion();
+
+    if (currentPage === 'home') {
+        initMacrosEditor();
+    }
     
     // Initialize health widget
     initHealthWidget();

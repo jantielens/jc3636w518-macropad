@@ -5,6 +5,8 @@
 #include "log_manager.h"
 #include "mqtt_manager.h"
 #include "device_telemetry.h"
+#include "ble_keyboard_manager.h"
+#include "macros_config.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <lwip/netif.h>
@@ -21,6 +23,12 @@
 // Configuration
 DeviceConfig device_config;
 bool config_loaded = false;
+
+// BLE keyboard (optional)
+BleKeyboardManager ble_keyboard;
+
+// Macro buttons (persisted separately from DeviceConfig)
+MacroConfig macro_config;
 
 #if HAS_MQTT
 MqttManager mqtt_manager;
@@ -148,6 +156,18 @@ void setup()
     device_config.magic = CONFIG_MAGIC;
   }
 
+  // Load macro config (independent of WiFi config validity)
+  (void)macros_config_load(&macro_config);
+
+  // Start BLE HID keyboard after device name is known.
+  // Safe no-op when HAS_BLE_KEYBOARD is false or Bluetooth is not enabled in the core.
+  ble_keyboard.begin(&device_config);
+
+  #if HAS_DISPLAY
+  // Provide runtime pointers used by MacroPadScreen.
+  display_manager_set_macro_runtime(&macro_config, &ble_keyboard);
+  #endif
+
   // Re-apply brightness from loaded config (display was initialized before config load)
   #if HAS_DISPLAY && HAS_BACKLIGHT
   Logger.logLinef("Main: Applying loaded brightness: %d%%", device_config.backlight_brightness);
@@ -212,8 +232,12 @@ void setup()
   display_manager_set_splash_status("Ready!");
   delay(2000);  // 2 seconds to see splash + status updates
 
-  // Navigate to info screen
-  display_manager_show_info();
+  // Navigate to Macro Screen 1 by default
+  bool ok = false;
+  display_manager_show_screen("macro1", &ok);
+  if (!ok) {
+    display_manager_show_info();
+  }
 
   // Start the screen saver inactivity timer after the first runtime screen is visible.
   // This avoids counting boot + splash time as "inactivity".

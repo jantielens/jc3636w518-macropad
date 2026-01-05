@@ -71,6 +71,7 @@ build_board() {
     local board_name="$2"
     local board_build_path="$BUILD_PATH/$board_name"
     local board_override_dir="$SCRIPT_DIR/src/boards/$board_name"
+    local board_overrides_file="$board_override_dir/board_overrides.h"
     
     echo -e "${CYAN}=== Building for $board_name ===${NC}"
     echo "Board:     $board_name"
@@ -79,6 +80,20 @@ build_board() {
     
     # Check for board-specific configuration overrides
     EXTRA_FLAGS=()
+
+    # Some third-party Arduino libraries (e.g., Async_TCP) are compiled as separate
+    # translation units and do not see macros defined only in board_overrides.h.
+    # If a board override defines CONFIG_ASYNC_TCP_STACK_SIZE, also pass it as a
+    # global -D so the library is compiled with the same value.
+    EXTRA_GLOBAL_DEFINES=""
+    if [[ -f "$board_overrides_file" ]]; then
+        async_tcp_stack_size=$(grep -E '^[[:space:]]*#define[[:space:]]+CONFIG_ASYNC_TCP_STACK_SIZE[[:space:]]+' "$board_overrides_file" \
+            | head -n 1 \
+            | awk '{print $3}')
+        if [[ -n "${async_tcp_stack_size:-}" ]]; then
+            EXTRA_GLOBAL_DEFINES+=" -DCONFIG_ASYNC_TCP_STACK_SIZE=${async_tcp_stack_size}"
+        fi
+    fi
 
     # Always embed board name for runtime identification (used by firmware update UX).
     # Use a string literal define: BUILD_BOARD_NAME="cyd-v2".
@@ -92,12 +107,12 @@ build_board() {
         # Sanitize board name for valid C++ macro (alphanumeric + underscore only)
         board_macro="BOARD_${board_name^^}"
         board_macro="${board_macro//[^A-Z0-9_]/_}"
-        EXTRA_FLAGS+=(--build-property "compiler.cpp.extra_flags=-I$board_override_dir -D$board_macro -DBOARD_HAS_OVERRIDE=1 $BOARD_NAME_DEFINE")
-        EXTRA_FLAGS+=(--build-property "compiler.c.extra_flags=-I$board_override_dir -D$board_macro -DBOARD_HAS_OVERRIDE=1 $BOARD_NAME_DEFINE")
+        EXTRA_FLAGS+=(--build-property "compiler.cpp.extra_flags=-I$board_override_dir -D$board_macro -DBOARD_HAS_OVERRIDE=1 $BOARD_NAME_DEFINE$EXTRA_GLOBAL_DEFINES")
+        EXTRA_FLAGS+=(--build-property "compiler.c.extra_flags=-I$board_override_dir -D$board_macro -DBOARD_HAS_OVERRIDE=1 $BOARD_NAME_DEFINE$EXTRA_GLOBAL_DEFINES")
     else
         echo "Config:    Using default configuration"
-        EXTRA_FLAGS+=(--build-property "compiler.cpp.extra_flags=$BOARD_NAME_DEFINE")
-        EXTRA_FLAGS+=(--build-property "compiler.c.extra_flags=$BOARD_NAME_DEFINE")
+        EXTRA_FLAGS+=(--build-property "compiler.cpp.extra_flags=$BOARD_NAME_DEFINE$EXTRA_GLOBAL_DEFINES")
+        EXTRA_FLAGS+=(--build-property "compiler.c.extra_flags=$BOARD_NAME_DEFINE$EXTRA_GLOBAL_DEFINES")
     fi
     echo ""
 
