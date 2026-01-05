@@ -21,6 +21,9 @@ Async TCP@3.4.9
 # Touch libraries
 XPT2046_Touchscreen@1.4.0
 
+# BLE (NimBLE)
+NimBLE-Arduino@2.3.6
+
 # Note: NetBIOS library is included in ESP32 core (no separate install needed)
 
 # Add additional libraries below:
