@@ -50,6 +50,12 @@
 #define HAS_MQTT true
 #endif
 
+// Enable BLE HID keyboard support.
+// Default: false (only enabled for boards that are known-good for NimBLE HID).
+#ifndef HAS_BLE_KEYBOARD
+#define HAS_BLE_KEYBOARD false
+#endif
+
 // GPIO for the built-in LED (only used when HAS_BUILTIN_LED is true).
 #ifndef LED_PIN
 #define LED_PIN 2  // Common GPIO for ESP32 boards

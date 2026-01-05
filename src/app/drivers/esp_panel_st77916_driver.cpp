@@ -4,6 +4,7 @@
 #include "../log_manager.h"
 
 #include <esp_heap_caps.h>
+#include <esp32-hal-psram.h>
 #include <driver/ledc.h>
 
 #ifndef TFT_SPI_FREQ_HZ
@@ -271,7 +272,23 @@ void ESPPanel_ST77916_Driver::init() {
     // Allocate a reusable swap buffer for optional byte swapping.
     // Size it to the LVGL draw buffer so we can swap+flush in one drawBitmap call.
     swapBufCapacityPixels = (uint32_t)LVGL_BUFFER_SIZE;
-    swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    swapBuf = nullptr;
+
+#if SOC_SPIRAM_SUPPORTED
+    if (psramFound()) {
+        swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels, MALLOC_CAP_SPIRAM);
+    }
+#endif
+    if (!swapBuf) {
+        swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    if (swapBuf) {
+        const size_t bytes = sizeof(uint16_t) * (size_t)swapBufCapacityPixels;
+        Logger.logLinef("ESP_Panel: swapBuf %u bytes [%s]", (unsigned)bytes, esp_ptr_external_ram(swapBuf) ? "PSRAM" : "internal");
+    } else {
+        Logger.logLine("ESP_Panel: swapBuf allocation FAILED");
+    }
 
     Logger.logLine("ESP_Panel: Display initialized");
 }

@@ -7,13 +7,16 @@
 
 // Increase AsyncTCP task stack size to prevent overflow
 // Default is 8192, increase to 16384 for web assets
+#ifndef CONFIG_ASYNC_TCP_STACK_SIZE
 #define CONFIG_ASYNC_TCP_STACK_SIZE 16384
+#endif
 
 #include "web_portal.h"
 #include "web_assets.h"
 #include "config_manager.h"
 #include "log_manager.h"
 #include "board_config.h"
+#include "macros_config.h"
 #include "device_telemetry.h"
 #include "github_release_config.h"
 #include "../version.h"
@@ -34,6 +37,10 @@
 #include <Update.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+
+#include <esp_heap_caps.h>
+#include <esp_system.h>
+#include <soc/soc_caps.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -60,6 +67,9 @@ void handlePostDisplaySleep(AsyncWebServerRequest *request);
 void handlePostDisplayWake(AsyncWebServerRequest *request);
 void handlePostDisplayActivity(AsyncWebServerRequest *request);
 
+void handleGetMacros(AsyncWebServerRequest *request);
+void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+
 void handleGetFirmwareLatest(AsyncWebServerRequest *request);
 void handlePostFirmwareUpdate(AsyncWebServerRequest *request);
 void handleGetFirmwareUpdateStatus(AsyncWebServerRequest *request);
@@ -81,6 +91,25 @@ static bool ota_in_progress = false;
 static size_t ota_progress = 0;
 static size_t ota_total = 0;
 
+// ===== Macros Config (8x9 buttons) =====
+static MacroConfig g_macros;
+static bool g_macros_loaded = false;
+static uint8_t* g_macros_body = nullptr;
+static size_t g_macros_body_total = 0;
+static bool g_macros_body_in_progress = false;
+
+static void macros_body_reset() {
+    if (g_macros_body) {
+        free(g_macros_body);
+        g_macros_body = nullptr;
+    }
+    g_macros_body_total = 0;
+    g_macros_body_in_progress = false;
+}
+
+// The runtime macro screen UI reads from this instance (defined in app.ino).
+extern MacroConfig macro_config;
+
 // ===== Basic Auth (optional; STA/full mode only) =====
 static bool portal_auth_required() {
     if (ap_mode_active) return false;
@@ -89,6 +118,30 @@ static bool portal_auth_required() {
 }
 
 static bool portal_auth_gate(AsyncWebServerRequest *request) {
+    // AsyncWebServer handlers execute on the AsyncTCP task.
+    // Log stack margin once so we can safely tune CONFIG_ASYNC_TCP_STACK_SIZE.
+    static bool logged_async_stack = false;
+    if (!logged_async_stack) {
+        const UBaseType_t remaining_words = uxTaskGetStackHighWaterMark(nullptr);
+        const uint32_t unit_bytes = (uint32_t)sizeof(StackType_t);
+        const uint32_t remaining_bytes = (uint32_t)remaining_words * unit_bytes;
+
+        // NOTE: uxTaskGetStackHighWaterMark() returns *words*.
+        // The actual configured AsyncTCP stack size depends on how the AsyncTCP library is compiled.
+        // CONFIG_ASYNC_TCP_STACK_SIZE here is the preprocessor value seen by this translation unit
+        // (it may or may not match the value used inside the AsyncTCP library).
+        const char* taskName = pcTaskGetName(nullptr);
+        Logger.logMessagef(
+            "Portal",
+            "AsyncTCP stack watermark: task=%s rem=%u units (%u B), unit=%u B, CONFIG_ASYNC_TCP_STACK_SIZE(raw)=%u",
+            taskName ? taskName : "(null)",
+            (unsigned)remaining_words,
+            (unsigned)remaining_bytes,
+            (unsigned)unit_bytes,
+            (unsigned)CONFIG_ASYNC_TCP_STACK_SIZE);
+        logged_async_stack = true;
+    }
+
     if (!portal_auth_required()) return true;
 
     const char *user = current_config->basic_auth_username;
@@ -100,6 +153,229 @@ static bool portal_auth_gate(AsyncWebServerRequest *request) {
 
     request->requestAuthentication(PROJECT_DISPLAY_NAME);
     return false;
+}
+
+// ===== /api/macros helpers =====
+static const char* macro_action_to_string(MacroButtonAction a) {
+    switch (a) {
+        case MacroButtonAction::None: return "none";
+        case MacroButtonAction::SendKeys: return "send_keys";
+        case MacroButtonAction::NavPrevScreen: return "nav_prev";
+        case MacroButtonAction::NavNextScreen: return "nav_next";
+        default: return "none";
+    }
+}
+
+static MacroButtonAction macro_action_from_string(const char* s) {
+    if (!s || !*s) return MacroButtonAction::None;
+    if (strcasecmp(s, "none") == 0) return MacroButtonAction::None;
+    if (strcasecmp(s, "send_keys") == 0) return MacroButtonAction::SendKeys;
+    if (strcasecmp(s, "nav_prev") == 0) return MacroButtonAction::NavPrevScreen;
+    if (strcasecmp(s, "nav_next") == 0) return MacroButtonAction::NavNextScreen;
+    return MacroButtonAction::None;
+}
+
+static void macros_cache_load_if_needed() {
+    if (g_macros_loaded) return;
+    g_macros_loaded = true;
+    if (!macros_config_load(&g_macros)) {
+        macros_config_set_defaults(&g_macros);
+    }
+
+    // Keep the on-device runtime config in sync so changes apply immediately.
+    memcpy(&macro_config, &g_macros, sizeof(MacroConfig));
+}
+
+// GET /api/macros
+void handleGetMacros(AsyncWebServerRequest *request) {
+    if (!portal_auth_gate(request)) return;
+
+    macros_cache_load_if_needed();
+
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    response->print("{\"success\":true,\"version\":1,\"screens\":[");
+
+    for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
+        if (s > 0) response->print(",");
+        response->print("{\"buttons\":[");
+
+        for (int b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
+            const MacroButtonConfig *btn = &g_macros.buttons[s][b];
+            if (b > 0) response->print(",");
+
+            // Use ArduinoJson to correctly escape strings, but keep the document tiny.
+            StaticJsonDocument<512> item;
+            item["label"] = btn->label;
+            item["action"] = macro_action_to_string(btn->action);
+            item["script"] = btn->script;
+            item["icon_id"] = btn->icon_id;
+            serializeJson(item, *response);
+        }
+
+        response->print("]}");
+    }
+
+    response->print("]}");
+    request->send(response);
+}
+
+// POST /api/macros
+// Accepts a single JSON payload containing all 8x9 buttons.
+void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    if (!portal_auth_gate(request)) return;
+
+    // Chunk-safe body accumulation (AsyncWebServer may call us multiple times).
+    if (index == 0) {
+        if (g_macros_body_in_progress) {
+            request->send(409, "application/json", "{\"success\":false,\"message\":\"Another macros update is in progress\"}");
+            return;
+        }
+
+        // Clean up any stale buffer from a previous attempt.
+        macros_body_reset();
+
+        g_macros_body_in_progress = true;
+        g_macros_body_total = total;
+
+#if SOC_SPIRAM_SUPPORTED
+        if (psramFound()) {
+            g_macros_body = (uint8_t*)heap_caps_malloc(total, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+#endif
+        if (!g_macros_body) {
+            g_macros_body = (uint8_t*)malloc(total);
+        }
+        if (!g_macros_body) {
+            macros_body_reset();
+            request->send(500, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+            return;
+        }
+    }
+
+    if (!g_macros_body_in_progress || !g_macros_body || g_macros_body_total != total) {
+        macros_body_reset();
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Internal state error\"}");
+        return;
+    }
+
+    if (index + len > total) {
+        macros_body_reset();
+        request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid upload\"}");
+        return;
+    }
+
+    memcpy(g_macros_body + index, data, len);
+
+    const bool is_final = (index + len == total);
+    if (!is_final) {
+        return;
+    }
+
+    // Parse JSON body
+    DynamicJsonDocument doc(32768);
+    DeserializationError error = deserializeJson(doc, g_macros_body, total);
+
+    macros_body_reset();
+
+    if (error) {
+        Logger.logMessagef("Macros", "JSON parse error: %s", error.c_str());
+        if (error == DeserializationError::NoMemory) {
+            request->send(413, "application/json", "{\"success\":false,\"message\":\"JSON body too large\"}");
+            return;
+        }
+        request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        return;
+    }
+
+    // Basic shape validation
+    if (!doc.containsKey("screens") || !doc["screens"].is<JsonArray>()) {
+        request->send(400, "application/json", "{\"success\":false,\"message\":\"Missing screens[]\"}");
+        return;
+    }
+
+    JsonArray screens = doc["screens"].as<JsonArray>();
+    if ((int)screens.size() != MACROS_SCREEN_COUNT) {
+        request->send(400, "application/json", "{\"success\":false,\"message\":\"screens[] has wrong length\"}");
+        return;
+    }
+
+    MacroConfig* next = nullptr;
+#if SOC_SPIRAM_SUPPORTED
+    if (psramFound()) {
+        next = (MacroConfig*)heap_caps_malloc(sizeof(MacroConfig), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+#endif
+    if (!next) {
+        next = (MacroConfig*)malloc(sizeof(MacroConfig));
+    }
+    if (!next) {
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
+    macros_config_set_defaults(next);
+
+    for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
+        JsonVariant sv = screens[s];
+        if (!sv.is<JsonObject>()) {
+            free(next);
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"screens[] entries must be objects\"}");
+            return;
+        }
+        JsonObject so = sv.as<JsonObject>();
+        if (!so.containsKey("buttons") || !so["buttons"].is<JsonArray>()) {
+            free(next);
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"Each screen must have buttons[]\"}");
+            return;
+        }
+        JsonArray buttons = so["buttons"].as<JsonArray>();
+        if ((int)buttons.size() != MACROS_BUTTONS_PER_SCREEN) {
+            free(next);
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"buttons[] must have length 9\"}");
+            return;
+        }
+
+        for (int b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
+            JsonVariant bv = buttons[b];
+            if (!bv.is<JsonObject>()) {
+                free(next);
+                request->send(400, "application/json", "{\"success\":false,\"message\":\"buttons[] entries must be objects\"}");
+                return;
+            }
+            JsonObject bo = bv.as<JsonObject>();
+
+            const char* label = bo["label"] | "";
+            const char* action_s = bo["action"] | "none";
+            const char* script = bo["script"] | "";
+            const char* icon_id = bo["icon_id"] | "";
+
+            strlcpy(next->buttons[s][b].label, label, sizeof(next->buttons[s][b].label));
+            next->buttons[s][b].action = macro_action_from_string(action_s);
+            strlcpy(next->buttons[s][b].script, script, sizeof(next->buttons[s][b].script));
+            strlcpy(next->buttons[s][b].icon_id, icon_id, sizeof(next->buttons[s][b].icon_id));
+
+            // Normalize: if action is none, clear script/icon to keep state tidy.
+            if (next->buttons[s][b].action == MacroButtonAction::None) {
+                next->buttons[s][b].script[0] = '\0';
+                next->buttons[s][b].icon_id[0] = '\0';
+            }
+        }
+    }
+
+    if (!macros_config_save(next)) {
+        free(next);
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to save\"}");
+        return;
+    }
+
+    g_macros = *next;
+    g_macros_loaded = true;
+
+    // Apply immediately to the runtime macro UI.
+    memcpy(&macro_config, &g_macros, sizeof(MacroConfig));
+
+    free(next);
+
+    request->send(200, "application/json", "{\"success\":true}\n");
 }
 
 // ===== GitHub Releases firmware update (app-only) =====
@@ -1397,6 +1673,9 @@ void web_portal_init(DeviceConfig *config) {
     current_config = config;
     Logger.logLinef("Portal config pointer: %p, backlight_brightness: %d", 
                     current_config, current_config->backlight_brightness);
+
+    // Load macros config once at portal init so GET /api/macros is cheap.
+    macros_cache_load_if_needed();
     
     // Create web server instance (avoid global constructor issues)
     if (server == nullptr) {
@@ -1422,6 +1701,16 @@ void web_portal_init(DeviceConfig *config) {
     // API endpoints
     server->on("/api/mode", HTTP_GET, handleGetMode);
     server->on("/api/config", HTTP_GET, handleGetConfig);
+
+    // Macros API
+    server->on("/api/macros", HTTP_GET, handleGetMacros);
+    server->on("/api/macros", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            if (!portal_auth_gate(request)) return;
+        },
+        NULL,
+        handlePostMacros
+    );
     
     server->on("/api/config", HTTP_POST, 
         [](AsyncWebServerRequest *request) {

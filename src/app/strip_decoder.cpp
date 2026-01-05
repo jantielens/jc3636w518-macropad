@@ -288,7 +288,11 @@ bool StripDecoder::ensure_buffers() {
     if (!work_buffer) {
         work_buffer_size = TJPGD_WORK_BUFFER_SIZE;
         #if defined(ARDUINO_ARCH_ESP32) || defined(ESP32)
-            work_buffer = heap_caps_malloc(work_buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            // Prefer PSRAM to avoid internal heap dips during JPEG strip decode.
+            work_buffer = heap_caps_malloc(work_buffer_size, MALLOC_CAP_SPIRAM);
+            if (!work_buffer) {
+                work_buffer = heap_caps_malloc(work_buffer_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            }
         #else
             work_buffer = malloc(work_buffer_size);
         #endif
@@ -311,7 +315,11 @@ bool StripDecoder::ensure_buffers() {
 
         const size_t bytes = (size_t)width * sizeof(uint16_t);
         #if defined(ARDUINO_ARCH_ESP32) || defined(ESP32)
-            line_buffer = (uint16_t*)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            // Prefer PSRAM; this buffer can be large on wide displays.
+            line_buffer = (uint16_t*)heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+            if (!line_buffer) {
+                line_buffer = (uint16_t*)heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+            }
         #else
             line_buffer = (uint16_t*)malloc(bytes);
         #endif

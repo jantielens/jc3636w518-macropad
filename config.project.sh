@@ -37,5 +37,5 @@ PROJECT_DISPLAY_NAME="jc3636w518 Macropad"
 #   ["cyd-v2"]="esp32:esp32:esp32"                                                # CYD display v2 (same FQBN as classic ESP32)
 #
 declare -A FQBN_TARGETS=(
-    ["jc3636w518"]="esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB,USBMode=hwcdc,CDCOnBoot=cdc" # ESP32-S3 JC3636W518 (16MB + OPI PSRAM)
+    ["jc3636w518"]="esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB_big_nvs,USBMode=hwcdc,CDCOnBoot=cdc" # ESP32-S3 JC3636W518 (16MB + OPI PSRAM)
 )

@@ -22,13 +22,25 @@
 // Global instance
 DisplayManager* displayManager = nullptr;
 
-DisplayManager::DisplayManager(DeviceConfig* cfg) 
-    : driver(nullptr), config(cfg), currentScreen(nullptr), previousScreen(nullptr), pendingScreen(nullptr), 
-      infoScreen(cfg, this), testScreen(this),
-      #if HAS_IMAGE_API
-      directImageScreen(this),
-      #endif
-        lvglTaskHandle(nullptr), lvglMutex(nullptr), screenCount(0), buf(nullptr), flushPending(false), directImageActive(false) {
+DisplayManager::DisplayManager(DeviceConfig* cfg)
+    : driver(nullptr),
+    config(cfg),
+    currentScreen(nullptr),
+    previousScreen(nullptr),
+    pendingScreen(nullptr),
+    infoScreen(cfg, this),
+    testScreen(this),
+#if HAS_IMAGE_API
+    directImageScreen(this),
+#endif
+    lvglTaskHandle(nullptr),
+    lvglMutex(nullptr),
+    screenCount(0),
+    buf(nullptr),
+    flushPending(false),
+    directImageActive(false),
+    macroConfig(nullptr),
+    bleKeyboard(nullptr) {
     // Instantiate selected display driver
     #if DISPLAY_DRIVER == DISPLAY_DRIVER_TFT_ESPI
     driver = new TFT_eSPI_Driver();
@@ -45,22 +57,34 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     // Create mutex for thread-safe LVGL access
     lvglMutex = xSemaphoreCreateMutex();
     
+    // Configure macro screens
+    for (int i = 0; i < MACROS_SCREEN_COUNT; i++) {
+        macroScreens[i].configure(this, (uint8_t)i);
+    }
+
     // Initialize screen registry (exclude splash - it's boot-specific)
-    availableScreens[0] = {"info", "Info Screen", &infoScreen};
-    availableScreens[1] = {"test", "Test Screen", &testScreen};
+    // Macro screens first
+    size_t idx = 0;
+    for (int i = 0; i < MACROS_SCREEN_COUNT; i++) {
+        snprintf(macroScreenIds[i], sizeof(macroScreenIds[i]), "macro%d", i + 1);
+        snprintf(macroScreenNames[i], sizeof(macroScreenNames[i]), "Macro %d", i + 1);
+        availableScreens[idx++] = {macroScreenIds[i], macroScreenNames[i], &macroScreens[i]};
+    }
+
+    // Existing utility screens
+    availableScreens[idx++] = {"info", "Info Screen", &infoScreen};
+    availableScreens[idx++] = {"test", "Test Screen", &testScreen};
+
     #if HAS_IMAGE_API
     // Optional LVGL image screen (JPEG -> RGB565 -> lv_img).
     // Included under HAS_IMAGE_API for simplicity. To reduce firmware size,
     // disable LVGL image support via LV_USE_IMG=0 / LV_USE_IMG_TRANSFORM=0 in src/app/lv_conf.h.
     #if LV_USE_IMG
-    availableScreens[2] = {"lvgl_image", "LVGL Image", &lvglImageScreen};
-    screenCount = 3;
-    #else
-    screenCount = 2;
+    availableScreens[idx++] = {"lvgl_image", "LVGL Image", &lvglImageScreen};
     #endif
-    #else
-    screenCount = 2;
     #endif
+
+    screenCount = idx;
     
     #if HAS_IMAGE_API
     // Register DirectImageScreen (optional, only shown via API)
@@ -80,6 +104,9 @@ DisplayManager::~DisplayManager() {
     }
     
     splashScreen.destroy();
+    for (int i = 0; i < MACROS_SCREEN_COUNT; i++) {
+        macroScreens[i].destroy();
+    }
     infoScreen.destroy();
     testScreen.destroy();
     
@@ -107,6 +134,11 @@ DisplayManager::~DisplayManager() {
         heap_caps_free(buf);
         buf = nullptr;
     }
+}
+
+void DisplayManager::setMacroRuntime(MacroConfig* cfg, BleKeyboardManager* keyboard) {
+    macroConfig = cfg;
+    bleKeyboard = keyboard;
 }
 
 const char* DisplayManager::getScreenIdForInstance(const Screen* screen) const {
@@ -322,7 +354,13 @@ void DisplayManager::initLVGL() {
         Logger.logEnd();
         return;
     }
-    Logger.logLinef("Buffer allocated: %d bytes (%d pixels)", LVGL_BUFFER_SIZE * sizeof(lv_color_t), LVGL_BUFFER_SIZE);
+
+    const bool bufInPsram = esp_ptr_external_ram(buf);
+    Logger.logLinef(
+        "Buffer allocated: %d bytes (%d pixels) [%s]",
+        LVGL_BUFFER_SIZE * sizeof(lv_color_t),
+        LVGL_BUFFER_SIZE,
+        bufInPsram ? "PSRAM" : "internal");
     
     // Initialize default theme (dark mode with custom primary color)
     lv_theme_t* theme = lv_theme_default_init(
@@ -457,7 +495,16 @@ void DisplayManager::returnToPreviousScreen() {
 #endif
 
 void DisplayManager::setSplashStatus(const char* text) {
-    lock();
+    // Avoid blocking boot indefinitely if the LVGL task died while holding the mutex.
+    if (isInLvglTask()) {
+        splashScreen.setStatus(text);
+        return;
+    }
+
+    if (!tryLock(100)) {
+        Logger.logMessage("Display", "Splash status update skipped (LVGL busy)");
+        return;
+    }
     splashScreen.setStatus(text);
     unlock();
 }
@@ -552,6 +599,12 @@ const ScreenInfo* display_manager_get_available_screens(size_t* count) {
 void display_manager_set_backlight_brightness(uint8_t brightness) {
     if (displayManager && displayManager->getDriver()) {
         displayManager->getDriver()->setBacklightBrightness(brightness);
+    }
+}
+
+void display_manager_set_macro_runtime(MacroConfig* cfg, BleKeyboardManager* keyboard) {
+    if (displayManager) {
+        displayManager->setMacroRuntime(cfg, keyboard);
     }
 }
 

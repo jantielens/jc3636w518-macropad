@@ -8,6 +8,8 @@
 #include "screens/splash_screen.h"
 #include "screens/info_screen.h"
 #include "screens/test_screen.h"
+#include "screens/macropad_screen.h"
+#include "macros_config.h"
 
 #if HAS_IMAGE_API
 #include "screens/direct_image_screen.h"
@@ -25,7 +27,10 @@
 // Maximum number of screens that can be registered for runtime navigation
 // Generous headroom (8 slots) allows adding new screens without recompiling
 // Only ~192 bytes total (24 bytes × 8), negligible overhead vs heap allocation
-#define MAX_SCREENS 8
+#define MAX_SCREENS 16
+
+struct MacroConfig;
+class BleKeyboardManager;
 
 // Struct for registering available screens dynamically
 struct ScreenInfo {
@@ -76,6 +81,15 @@ private:
     SplashScreen splashScreen;
     InfoScreen infoScreen;
     TestScreen testScreen;
+
+    // Fixed macro pad screens (created lazily on first show)
+    MacroPadScreen macroScreens[MACROS_SCREEN_COUNT];
+
+    // Persistent storage for screen registry strings.
+    // "macro" + up to 2 digits + NUL
+    char macroScreenIds[MACROS_SCREEN_COUNT][8];
+    // "Macro " + up to 2 digits + NUL
+    char macroScreenNames[MACROS_SCREEN_COUNT][16];
     
     #if HAS_IMAGE_API
     DirectImageScreen directImageScreen;
@@ -94,6 +108,10 @@ private:
     // Uses the registered screen list so adding new screens doesn't require
     // updating logging code.
     const char* getScreenIdForInstance(const Screen* screen) const;
+
+    // Macro runtime pointers (owned elsewhere; set by app.ino after init)
+    MacroConfig* macroConfig;
+    BleKeyboardManager* bleKeyboard;
     
     // Hardware initialization
     void initHardware();
@@ -125,6 +143,10 @@ public:
     void showSplash();
     void showInfo();
     void showTest();
+
+    void setMacroRuntime(MacroConfig* cfg, BleKeyboardManager* keyboard);
+    const MacroConfig* getMacroConfig() const { return macroConfig; }
+    BleKeyboardManager* getBleKeyboard() const { return bleKeyboard; }
     
     #if HAS_IMAGE_API
     void showDirectImage();
@@ -186,6 +208,10 @@ const char* display_manager_get_current_screen_id();
 const ScreenInfo* display_manager_get_available_screens(size_t* count);
 void display_manager_set_splash_status(const char* text);
 void display_manager_set_backlight_brightness(uint8_t brightness);  // 0-100%
+
+// Provide macro runtime pointers used by MacroPadScreen.
+// Safe to call multiple times.
+void display_manager_set_macro_runtime(MacroConfig* cfg, BleKeyboardManager* keyboard);
 
 // Serialization helpers for code running outside the LVGL task.
 // Use these to avoid concurrent access to buffered display backends (e.g., Arduino_GFX canvas).

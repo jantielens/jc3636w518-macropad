@@ -74,4 +74,6 @@ After adding or changing partition schemes, run:
 
 ## Operational note
 
-After changing the partition table, the **first flash should be done over serial (USB)**. OTA updates will work normally afterwards once the correct partition table is on the device.
+After changing the partition table, the **first flash should be done over serial (USB)**.
+
+This repo’s [upload.sh](../upload.sh) detects `PartitionScheme=...` targets and uses `esptool.py` to flash the bootloader + partition table + app at the correct offsets (while preserving NVS), so `./bum.sh <board>` remains a reliable workflow even with custom partition tables.

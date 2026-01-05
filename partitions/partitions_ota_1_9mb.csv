@@ -1,4 +1,4 @@
-# Custom partition table for 4MB flash with OTA support
+# Custom partition table for OTA support (installed via tools/install-custom-partitions.sh)
 #
 # Goal:
 # - Maximize app partition size while keeping dual OTA partitions (app0/app1)
@@ -9,9 +9,12 @@
 # - The FQBN option `PartitionScheme=ota_1_9mb` must match this filename (without .csv)
 #
 # Name,    Type, SubType,  Offset,   Size,     Flags
-nvs,       data, nvs,      0x9000,   0x5000,
-otadata,   data, ota,      0xE000,   0x2000,
-app0,      app,  ota_0,    0x10000,  0x1E0000,
-app1,      app,  ota_1,    0x1F0000, 0x1E0000,
-coredump,  data, coredump, 0x3D0000, 0x10000,
-spiffs,    data, spiffs,   0x3E0000, 0x20000,
+# NOTE: Macro config is stored as a single NVS blob (~22KB). The default 0x5000
+# NVS partition is too small once device config is also stored. Increase NVS and
+# shift app partitions accordingly (still fits in 4MB flash).
+nvs,       data, nvs,      0x9000,   0x10000,
+otadata,   data, ota,      0x19000,  0x2000,
+app0,      app,  ota_0,    0x20000,  0x1D0000,
+app1,      app,  ota_1,    0x1F0000, 0x1D0000,
+coredump,  data, coredump, 0x3C0000, 0x10000,
+spiffs,    data, spiffs,   0x3D0000, 0x30000,

@@ -163,7 +163,14 @@ bool lvgl_jpeg_decode_to_rgb565(
     // TJpgDec work area.
     static const size_t kWorkSize = 4096;
     bool work_is_caps = true;
-    void* work = heap_caps_malloc(kWorkSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    void* work = nullptr;
+
+#if SOC_SPIRAM_SUPPORTED
+    work = heap_caps_malloc(kWorkSize, MALLOC_CAP_SPIRAM);
+#endif
+    if (!work) {
+        work = heap_caps_malloc(kWorkSize, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
     if (!work) {
         work_is_caps = false;
         work = malloc(kWorkSize);
