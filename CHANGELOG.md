@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.1] - 2026-01-06
+
+### Fixed
+- Defer splash status updates when LVGL is busy, instead of dropping them.
+- Harden `/api/macros` upload gating to avoid concurrent upload races.
+
 ## [1.0.0] - 2024-06-26
 
 ---
