@@ -40,7 +40,9 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     flushPending(false),
     directImageActive(false),
     macroConfig(nullptr),
-    bleKeyboard(nullptr) {
+    bleKeyboard(nullptr),
+    pendingSplashStatus{0},
+    pendingSplashStatusPending(false) {
     // Instantiate selected display driver
     #if DISPLAY_DRIVER == DISPLAY_DRIVER_TFT_ESPI
     driver = new TFT_eSPI_Driver();
@@ -243,6 +245,12 @@ void DisplayManager::lvglTask(void* pvParameter) {
     
     while (true) {
         mgr->lock();
+
+        // Apply deferred splash status update if one was queued.
+        if (mgr->pendingSplashStatusPending && mgr->currentScreen == &mgr->splashScreen) {
+            mgr->splashScreen.setStatus(mgr->pendingSplashStatus);
+            mgr->pendingSplashStatusPending = false;
+        }
         
         // Process pending screen switch (deferred from external calls)
         if (mgr->pendingScreen) {
@@ -502,7 +510,9 @@ void DisplayManager::setSplashStatus(const char* text) {
     }
 
     if (!tryLock(100)) {
-        Logger.logMessage("Display", "Splash status update skipped (LVGL busy)");
+        // LVGL is busy; defer rather than dropping the update.
+        strlcpy(pendingSplashStatus, text ? text : "", sizeof(pendingSplashStatus));
+        pendingSplashStatusPending = true;
         return;
     }
     splashScreen.setStatus(text);
