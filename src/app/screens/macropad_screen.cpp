@@ -2,6 +2,7 @@
 
 #include "../display_manager.h"
 #include "../macros_config.h"
+#include "../macro_templates.h"
 #include "../ble_keyboard_manager.h"
 #include "../ducky_script.h"
 #include "../log_manager.h"
@@ -13,6 +14,7 @@
 
 #include <math.h>
 #include <esp_system.h>
+#include <string.h>
 
 #include <WiFi.h>
 
@@ -55,7 +57,9 @@ void MacroPadScreen::configure(DisplayManager* manager, uint8_t idx) {
     displayMgr = manager;
     screenIndex = idx;
 
-    for (int i = 0; i < 9; i++) {
+    lastTemplateId[0] = '\0';
+
+    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         buttons[i] = nullptr;
         labels[i] = nullptr;
         buttonCtx[i] = {this, (uint8_t)i};
@@ -86,14 +90,14 @@ void MacroPadScreen::create() {
     screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
 
-    // Create 9 circular clickable objects with centered labels.
+    // Create clickable objects with centered labels.
     // (Avoid lv_btn_create so this works even when LV_USE_BTN=0.)
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         lv_obj_t* btn = lv_obj_create(screen);
-        lv_obj_set_style_radius(btn, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_radius(btn, 10, 0);
         lv_obj_set_style_bg_color(btn, lv_color_make(30, 30, 30), 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        // No outline/border: keep buttons as solid discs.
+        // No outline/border by default.
         lv_obj_set_style_border_width(btn, 0, 0);
         lv_obj_set_style_outline_width(btn, 0, 0);
         lv_obj_set_style_outline_pad(btn, 0, 0);
@@ -136,7 +140,7 @@ void MacroPadScreen::destroy() {
         screen = nullptr;
     }
 
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         buttons[i] = nullptr;
         labels[i] = nullptr;
     }
@@ -151,6 +155,10 @@ void MacroPadScreen::show() {
         create();
     }
     if (screen) {
+        // If the template was changed in the web UI while we're running,
+        // re-apply layout before showing this screen.
+        layoutButtons();
+        refreshButtons(true);
         lv_scr_load(screen);
     }
 }
@@ -160,6 +168,216 @@ void MacroPadScreen::hide() {
 }
 
 void MacroPadScreen::layoutButtons() {
+    if (!screen || !displayMgr) return;
+
+    const MacroConfig* cfg = getMacroConfig();
+    const char* tpl = (cfg && cfg->template_id[screenIndex][0]) ? cfg->template_id[screenIndex] : macro_templates::default_id();
+    if (!macro_templates::is_valid(tpl)) {
+        tpl = macro_templates::default_id();
+    }
+
+    // Cache the applied template so update() can detect changes.
+    strlcpy(lastTemplateId, tpl, sizeof(lastTemplateId));
+
+    if (strcmp(tpl, macro_templates::kTemplateStackSides5) == 0) {
+        layoutButtonsFiveStack();
+    } else if (strcmp(tpl, macro_templates::kTemplateWideSides3) == 0) {
+        layoutButtonsWideCenter();
+    } else if (strcmp(tpl, macro_templates::kTemplateSplitSides4) == 0) {
+        layoutButtonsFourSplit();
+    } else {
+        layoutButtonsRound9();
+    }
+}
+
+bool MacroPadScreen::isSlotUsedByTemplate(uint8_t slot) const {
+    const MacroConfig* cfg = getMacroConfig();
+    const char* tpl = (cfg && cfg->template_id[screenIndex][0]) ? cfg->template_id[screenIndex] : macro_templates::default_id();
+    if (!macro_templates::is_valid(tpl)) {
+        tpl = macro_templates::default_id();
+    }
+
+    if (strcmp(tpl, macro_templates::kTemplateStackSides5) == 0) {
+        return slot < 5;
+    }
+
+    if (strcmp(tpl, macro_templates::kTemplateWideSides3) == 0) {
+        return slot < 3;
+    }
+
+    if (strcmp(tpl, macro_templates::kTemplateSplitSides4) == 0) {
+        return slot == 0 || slot == 2 || slot == 3 || slot == 4;
+    }
+
+    // round9
+    return slot < 9;
+}
+
+void MacroPadScreen::layoutButtonsWideCenter() {
+    if (!screen || !displayMgr) return;
+
+    const int w = displayMgr->getActiveWidth();
+    const int h = displayMgr->getActiveHeight();
+
+    // Match five_stack margins/spacing logic.
+    const int padX = (w + h) / 2 / 24; // ~15px at 360
+    const int spacing = (padX >= 9) ? (padX / 3) : 3; // ~5px at 360
+
+    // Touch targets. Side buttons must touch the screen edges.
+    const int minTouchPx = 52;
+    const int minCenterW = minTouchPx * 2;
+
+    int sideW = (int)((float)w * 0.18f);
+    if (sideW < minTouchPx) sideW = minTouchPx;
+    const int maxSideW = (w - minCenterW - (2 * spacing)) / 2;
+    if (sideW > maxSideW) sideW = maxSideW;
+
+    const int xLeft = 0;
+    const int xCenter = sideW + spacing;
+    int centerW = w - (2 * sideW) - (2 * spacing);
+    if (centerW < minCenterW) centerW = minCenterW;
+    const int xRight = w - sideW;
+
+    const int yTop = 0;
+    const int fullH = h;
+
+    // Used slots: 0=center, 1=right, 2=left. Hide everything else.
+    for (int i = 0; i < 3; i++) {
+        if (!buttons[i]) continue;
+        lv_obj_set_style_radius(buttons[i], 10, 0);
+        lv_obj_set_style_border_width(buttons[i], 0, 0);
+        lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = 3; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        if (buttons[i]) lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Center (slot 0)
+    if (buttons[0]) {
+        lv_obj_set_pos(buttons[0], xCenter, yTop);
+        lv_obj_set_size(buttons[0], centerW, fullH);
+        if (labels[0]) {
+            lv_obj_set_width(labels[0], (centerW > 12) ? (centerW - 12) : centerW);
+            lv_obj_center(labels[0]);
+        }
+    }
+
+    // Right (slot 1)
+    if (buttons[1]) {
+        lv_obj_set_pos(buttons[1], xRight, yTop);
+        lv_obj_set_size(buttons[1], sideW, fullH);
+        if (labels[1]) {
+            lv_obj_set_width(labels[1], (sideW > 8) ? (sideW - 8) : sideW);
+            lv_obj_center(labels[1]);
+        }
+    }
+
+    // Left (slot 2)
+    if (buttons[2]) {
+        lv_obj_set_pos(buttons[2], xLeft, yTop);
+        lv_obj_set_size(buttons[2], sideW, fullH);
+        if (labels[2]) {
+            lv_obj_set_width(labels[2], (sideW > 8) ? (sideW - 8) : sideW);
+            lv_obj_center(labels[2]);
+        }
+    }
+}
+
+void MacroPadScreen::layoutButtonsFourSplit() {
+    if (!screen || !displayMgr) return;
+
+    const int w = displayMgr->getActiveWidth();
+    const int h = displayMgr->getActiveHeight();
+
+    // Match five_stack margins/spacing logic.
+    const int padX = (w + h) / 2 / 24; // ~15px at 360
+    const int spacing = (padX >= 9) ? (padX / 3) : 3; // ~5px at 360
+
+    const int minTouchPx = 52;
+    const int minCenterW = minTouchPx * 2;
+
+    int sideW = (int)((float)w * 0.18f);
+    if (sideW < minTouchPx) sideW = minTouchPx;
+    const int maxSideW = (w - minCenterW - (2 * spacing)) / 2;
+    if (sideW > maxSideW) sideW = maxSideW;
+
+    const int xLeft = 0;
+    const int xCenter = sideW + spacing;
+    int centerW = w - (2 * sideW) - (2 * spacing);
+    if (centerW < minCenterW) centerW = minCenterW;
+    const int xRight = w - sideW;
+
+    const int yTop = 0;
+    const int fullH = h;
+
+    // Used slots: 0 (center-top), 2 (center-bottom), 3 (left), 4 (right).
+    // Hide everything else.
+    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        if (!buttons[i]) continue;
+        const bool used = (i == 0 || i == 2 || i == 3 || i == 4);
+        if (used) {
+            lv_obj_set_style_radius(buttons[i], 10, 0);
+            lv_obj_set_style_border_width(buttons[i], 0, 0);
+            lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    // Center is split horizontally into top/bottom.
+    int topH = (fullH - spacing) / 2;
+    int bottomH = fullH - topH - spacing;
+    if (topH < minTouchPx || bottomH < minTouchPx) {
+        // Clamp if needed.
+        topH = (topH < minTouchPx) ? minTouchPx : topH;
+        bottomH = fullH - topH - spacing;
+        if (bottomH < minTouchPx) {
+            bottomH = minTouchPx;
+            topH = fullH - bottomH - spacing;
+            if (topH < minTouchPx) topH = minTouchPx;
+        }
+    }
+
+    // Slot 0 = center top.
+    if (buttons[0]) {
+        lv_obj_set_pos(buttons[0], xCenter, yTop);
+        lv_obj_set_size(buttons[0], centerW, topH);
+        if (labels[0]) {
+            lv_obj_set_width(labels[0], (centerW > 12) ? (centerW - 12) : centerW);
+            lv_obj_center(labels[0]);
+        }
+    }
+
+    // Slot 2 = center bottom.
+    if (buttons[2]) {
+        lv_obj_set_pos(buttons[2], xCenter, yTop + topH + spacing);
+        lv_obj_set_size(buttons[2], centerW, bottomH);
+        if (labels[2]) {
+            lv_obj_set_width(labels[2], (centerW > 12) ? (centerW - 12) : centerW);
+            lv_obj_center(labels[2]);
+        }
+    }
+
+    // Side buttons full-height, touching outer edges.
+    if (buttons[3]) {
+        lv_obj_set_pos(buttons[3], xLeft, yTop);
+        lv_obj_set_size(buttons[3], sideW, fullH);
+        if (labels[3]) {
+            lv_obj_set_width(labels[3], (sideW > 8) ? (sideW - 8) : sideW);
+            lv_obj_center(labels[3]);
+        }
+    }
+    if (buttons[4]) {
+        lv_obj_set_pos(buttons[4], xRight, yTop);
+        lv_obj_set_size(buttons[4], sideW, fullH);
+        if (labels[4]) {
+            lv_obj_set_width(labels[4], (sideW > 8) ? (sideW - 8) : sideW);
+            lv_obj_center(labels[4]);
+        }
+    }
+}
+
+void MacroPadScreen::layoutButtonsRound9() {
     if (!screen || !displayMgr) return;
 
     const int w = displayMgr->getActiveWidth();
@@ -190,6 +408,18 @@ void MacroPadScreen::layoutButtons() {
 
     // Label width scales with button size.
     const int labelWidth = (btnSize > 24) ? (btnSize - 18) : btnSize;
+
+    // Round discs.
+    for (int i = 0; i < 9; i++) {
+        if (!buttons[i]) continue;
+        lv_obj_set_style_radius(buttons[i], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(buttons[i], 0, 0);
+        lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    // Hide unused.
+    for (int i = 9; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        if (buttons[i]) lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+    }
 
     // Center button (#9) is index 8.
     if (buttons[8]) {
@@ -222,6 +452,117 @@ void MacroPadScreen::layoutButtons() {
     }
 }
 
+void MacroPadScreen::layoutButtonsFiveStack() {
+    if (!screen || !displayMgr) return;
+
+    const int w = displayMgr->getActiveWidth();
+    const int h = displayMgr->getActiveHeight();
+
+    // Layout intentionally uses the full rectangular screen bounds (0..w, 0..h).
+    // It's OK if elements fall outside the visible round area.
+    const int padX = (w + h) / 2 / 24; // ~15px at 360
+    // Use one spacing value for both axes so vertical gaps match horizontal gaps.
+    // Keep it relatively small; we'll refine visually later.
+    const int spacing = (padX >= 9) ? (padX / 3) : 3; // ~5px at 360
+
+    // Touch targets. Side buttons must touch the screen edges.
+    const int minTouchPx = 52;
+
+    // Side width: try to keep them smaller than center, but wide enough to tap,
+    // and wide enough to reach the screen edges.
+    const int minCenterW = minTouchPx * 2;
+    int sideW = (int)((float)w * 0.18f);
+    if (sideW < minTouchPx) sideW = minTouchPx;
+    const int maxSideW = (w - minCenterW - (2 * spacing)) / 2;
+    if (sideW > maxSideW) sideW = maxSideW;
+
+    // Center stack is separated from the side buttons by `spacing`.
+    const int xLeft = 0;
+    const int xCenter = sideW + spacing;
+    int centerW = w - (2 * sideW) - (2 * spacing);
+    if (centerW < minCenterW) centerW = minCenterW;
+    const int xRight = w - sideW;
+    const int yTop = 0;
+    const int usableH = h;
+
+    // Stack fills full height.
+    // Buttons 1 and 3 (slots 0 and 2) touch the top/bottom screen edges.
+    // Button 2 (slot 1) is taller and uses the remaining space.
+    // Make top/bottom taller and the middle less tall.
+    int topH = (int)((float)usableH * 0.30f);
+    int bottomH = topH;
+    if (topH < minTouchPx) topH = minTouchPx;
+    if (bottomH < minTouchPx) bottomH = minTouchPx;
+    int middleH = usableH - topH - bottomH - (2 * spacing);
+    if (middleH < minTouchPx) {
+        // Steal from top/bottom evenly if the screen is too small.
+        const int need = minTouchPx - middleH;
+        const int stealEach = (need + 1) / 2;
+        topH = (topH - stealEach > minTouchPx) ? (topH - stealEach) : minTouchPx;
+        bottomH = (bottomH - stealEach > minTouchPx) ? (bottomH - stealEach) : minTouchPx;
+        middleH = usableH - topH - bottomH - (2 * spacing);
+        if (middleH < minTouchPx) middleH = minTouchPx;
+    }
+
+    // Show slots 0..4, hide the rest.
+    for (int i = 0; i < 5; i++) {
+        if (!buttons[i]) continue;
+        lv_obj_set_style_radius(buttons[i], 10, 0);
+        lv_obj_set_style_border_width(buttons[i], 0, 0);
+        lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = 5; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        if (buttons[i]) lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Slots 0,1,2 = stacked center.
+    if (buttons[0]) {
+        lv_obj_set_pos(buttons[0], xCenter, yTop);
+        lv_obj_set_size(buttons[0], centerW, topH);
+        if (labels[0]) {
+            lv_obj_set_width(labels[0], (centerW > 12) ? (centerW - 12) : centerW);
+            lv_obj_center(labels[0]);
+        }
+    }
+    if (buttons[1]) {
+        lv_obj_set_pos(buttons[1], xCenter, yTop + topH + spacing);
+        lv_obj_set_size(buttons[1], centerW, middleH);
+        if (labels[1]) {
+            lv_obj_set_width(labels[1], (centerW > 12) ? (centerW - 12) : centerW);
+            lv_obj_center(labels[1]);
+        }
+    }
+    if (buttons[2]) {
+        lv_obj_set_pos(buttons[2], xCenter, yTop + usableH - bottomH);
+        lv_obj_set_size(buttons[2], centerW, bottomH);
+        if (labels[2]) {
+            lv_obj_set_width(labels[2], (centerW > 12) ? (centerW - 12) : centerW);
+            lv_obj_center(labels[2]);
+        }
+    }
+
+    // Slot 3 = left rail, Slot 4 = right rail.
+    // Align with the top of button 1 and bottom of button 3.
+    const int ySide = yTop;
+    const int sideH = usableH;
+    if (buttons[3]) {
+        lv_obj_set_pos(buttons[3], xLeft, ySide);
+        lv_obj_set_size(buttons[3], sideW, sideH);
+        if (labels[3]) {
+            lv_obj_set_width(labels[3], (sideW > 8) ? (sideW - 8) : sideW);
+            lv_obj_center(labels[3]);
+        }
+    }
+    if (buttons[4]) {
+        lv_obj_set_pos(buttons[4], xRight, ySide);
+        lv_obj_set_size(buttons[4], sideW, sideH);
+        if (labels[4]) {
+            lv_obj_set_width(labels[4], (sideW > 8) ? (sideW - 8) : sideW);
+            lv_obj_center(labels[4]);
+        }
+    }
+}
+
 void MacroPadScreen::refreshButtons(bool force) {
     if (!screen) return;
 
@@ -236,8 +577,13 @@ void MacroPadScreen::refreshButtons(bool force) {
 
     bool anyButtonConfigured = false;
 
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         const MacroButtonConfig* btnCfg = &cfg->buttons[screenIndex][i];
+
+        if (!isSlotUsedByTemplate((uint8_t)i)) {
+            setButtonVisible(buttons[i], false);
+            continue;
+        }
 
         if (btnCfg->action != MacroButtonAction::None) {
             anyButtonConfigured = true;
@@ -321,6 +667,21 @@ void MacroPadScreen::updateEmptyState(bool anyButtonConfigured) {
 }
 
 void MacroPadScreen::update() {
+    const MacroConfig* cfg = getMacroConfig();
+    if (cfg) {
+        const char* tpl = (cfg->template_id[screenIndex][0] != '\0') ? cfg->template_id[screenIndex] : macro_templates::default_id();
+        if (!macro_templates::is_valid(tpl)) {
+            tpl = macro_templates::default_id();
+        }
+
+        if (strcmp(tpl, lastTemplateId) != 0) {
+            // Template changed: re-layout immediately.
+            layoutButtons();
+            refreshButtons(true);
+            return;
+        }
+    }
+
     refreshButtons(false);
 }
 

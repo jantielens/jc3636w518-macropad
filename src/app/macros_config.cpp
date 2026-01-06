@@ -20,7 +20,7 @@
 #define KEY_BLOB  "b"
 
 #define MACROS_MAGIC 0x4D414352u // 'MACR'
-#define MACROS_VERSION 1
+#define MACROS_VERSION 5
 
 static Preferences prefs;
 
@@ -54,13 +54,24 @@ static bool ensure_ffat() {
         return false;
     }
 
-    // Do NOT auto-format if mount fails; falling back to NVS is safer.
+    // Try mounting without formatting first.
     const esp_log_level_t prev = esp_log_level_get("vfs_fat_spiflash");
     esp_log_level_set("vfs_fat_spiflash", ESP_LOG_NONE);
     ffat_ready = FFat.begin(false);
     esp_log_level_set("vfs_fat_spiflash", prev);
+
+    // If the partition exists but is not formatted yet, auto-format so we can
+    // store large macro payloads (NVS has practical blob-size limits).
     if (!ffat_ready) {
-        Logger.logLine("[Macros] FFat not available; using NVS");
+        Logger.logLine("[Macros] FFat mount failed; formatting...");
+        const esp_log_level_t prev2 = esp_log_level_get("vfs_fat_spiflash");
+        esp_log_level_set("vfs_fat_spiflash", ESP_LOG_NONE);
+        ffat_ready = FFat.begin(true);
+        esp_log_level_set("vfs_fat_spiflash", prev2);
+
+        if (!ffat_ready) {
+            Logger.logLine("[Macros] FFat not available; using NVS");
+        }
     }
     return ffat_ready;
 #else
@@ -155,6 +166,10 @@ static bool macros_reset_ffat() {
 void macros_config_set_defaults(MacroConfig* cfg) {
     if (!cfg) return;
     memset(cfg, 0, sizeof(MacroConfig));
+
+    for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
+        strlcpy(cfg->template_id[s], "round_ring_9", sizeof(cfg->template_id[s]));
+    }
 
     for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
         for (int b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {

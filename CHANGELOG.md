@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-01-06
+
+### Added
+- Add macro screen templates (per-screen layout selection) with multiple built-in round-screen layouts.
+- Expose templates via `/api/macros` for the web editor (including selector layout hints).
+
+### Changed
+- Bump macros config version and expand stored template id length for standardized template IDs.
+
+### Fixed
+- Fix template selection being ignored (always falling back to the default template) due to stored template id truncation.
+- Avoid a brief default grid flash in the web portal Macros editor while `/api/macros` is loading.
+
 ## [1.0.3] - 2026-01-06
 
 ### Added

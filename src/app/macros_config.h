@@ -18,7 +18,7 @@
 #endif
 
 #ifndef MACROS_BUTTONS_PER_SCREEN
-#define MACROS_BUTTONS_PER_SCREEN 9
+#define MACROS_BUTTONS_PER_SCREEN 16
 #endif
 
 // Keep sizes conservative to avoid RAM pressure.
@@ -26,6 +26,10 @@
 #define MACROS_LABEL_MAX_LEN 16
 #define MACROS_SCRIPT_MAX_LEN 256
 #define MACROS_ICON_ID_MAX_LEN 32
+
+// Template IDs are stored per macro screen.
+// Keep this large enough for descriptive IDs like "round_stack_sides_5".
+#define MACROS_TEMPLATE_ID_MAX_LEN 32
 
 enum class MacroButtonAction : uint8_t {
     None = 0,
@@ -42,6 +46,9 @@ struct MacroButtonConfig {
 };
 
 struct MacroConfig {
+    // Template id per macro screen (NUL-terminated).
+    // Stored alongside buttons in the same blob/file.
+    char template_id[MACROS_SCREEN_COUNT][MACROS_TEMPLATE_ID_MAX_LEN];
     MacroButtonConfig buttons[MACROS_SCREEN_COUNT][MACROS_BUTTONS_PER_SCREEN];
 };
 
