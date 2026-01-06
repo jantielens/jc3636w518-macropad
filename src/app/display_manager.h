@@ -140,6 +140,9 @@ private:
 public:
     DisplayManager(DeviceConfig* config);
     ~DisplayManager();
+
+    // Access to the active device configuration (owned by app.ino).
+    const DeviceConfig* getConfig() const { return config; }
     
     // Initialize hardware + LVGL + screens + rendering task (shows splash automatically)
     void init();

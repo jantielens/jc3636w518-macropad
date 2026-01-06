@@ -274,14 +274,26 @@ void ESPPanel_ST77916_Driver::init() {
     swapBufCapacityPixels = (uint32_t)LVGL_BUFFER_SIZE;
     swapBuf = nullptr;
 
+    // Prefer internal DMA-capable memory for reliability on QSPI flush.
+    // Some panel/bus implementations can stall when given PSRAM-backed buffers.
+#if defined(MALLOC_CAP_DMA)
+    swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels,
+                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+#else
+    swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels,
+                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
+    if (!swapBuf) {
+        // Fallback: internal RAM without DMA capability (still often works, depends on underlying driver).
+        swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels,
+                                             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
 #if SOC_SPIRAM_SUPPORTED
-    if (psramFound()) {
+    if (!swapBuf && psramFound()) {
+        // Last resort: PSRAM.
         swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels, MALLOC_CAP_SPIRAM);
     }
 #endif
-    if (!swapBuf) {
-        swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    }
 
     if (swapBuf) {
         const size_t bytes = sizeof(uint16_t) * (size_t)swapBufCapacityPixels;
@@ -373,7 +385,9 @@ void ESPPanel_ST77916_Driver::pushColors(uint16_t* data, uint32_t len, bool swap
     // The ESP_Panel API expects a byte pointer.
     // If swap_bytes is requested, swap into a contiguous buffer and flush once.
     if (!swap_bytes || !swapBuf || swapBufCapacityPixels < pixelCount) {
-        lcd->drawBitmap(currentX, currentY, currentW, currentH, (const uint8_t*)data);
+        // For non-RGB panels, drawBitmap() is DMA-based and may return before the transfer completes.
+        // LVGL's flush callback must not signal "flush ready" until the panel IO is done.
+        (void)lcd->drawBitmapWaitUntilFinish(currentX, currentY, currentW, currentH, (const uint8_t*)data, 500);
         return;
     }
 
@@ -381,5 +395,6 @@ void ESPPanel_ST77916_Driver::pushColors(uint16_t* data, uint32_t len, bool swap
         uint16_t v = data[i];
         swapBuf[i] = (uint16_t)((v << 8) | (v >> 8));
     }
-    lcd->drawBitmap(currentX, currentY, currentW, currentH, (const uint8_t*)swapBuf);
+    // See note above: wait until DMA transfer completes before returning to LVGL.
+    (void)lcd->drawBitmapWaitUntilFinish(currentX, currentY, currentW, currentH, (const uint8_t*)swapBuf, 500);
 }

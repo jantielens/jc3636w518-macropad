@@ -59,7 +59,7 @@
 
 // Match the sample: prefer PSRAM for LVGL draw buffer (fallback handled in DisplayManager).
 // Prefer internal RAM over PSRAM for LVGL draw buffer allocation.
-#define LVGL_BUFFER_PREFER_INTERNAL false
+#define LVGL_BUFFER_PREFER_INTERNAL true
 // LVGL draw buffer size in pixels.
 #define LVGL_BUFFER_SIZE (DISPLAY_WIDTH * 16)  // 16 rows (matches sample default)
 

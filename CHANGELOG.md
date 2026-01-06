@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.3] - 2026-01-06
+
+### Added
+- Add a portal-driven screen switching stress test script (`tools/screen_stress_test.py`) to quickly reproduce/validate long-run display stability.
+- Show a portal hint/empty-state message on empty macro screens at boot.
+
+### Changed
+- Improve the web portal Macros editor UX.
+- Rotate the Macros Editor button grid so button #1 is at 12 o'clock.
+
+### Fixed
+- Mitigate intermittent display hangs during rapid screen switching on `jc3636w518` by preferring internal RAM for the LVGL draw buffer and using an internal/DMA-capable swap buffer.
+- Make ESP_Panel flush synchronous by waiting for DMA transfer completion before returning to LVGL.
+
 ## [1.0.2] - 2026-01-06
 
 ### Fixed
