@@ -11,6 +11,11 @@
 #include <ESPmDNS.h>
 #include <lwip/netif.h>
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include <soc/soc_caps.h>
+#include <esp_attr.h>
+#endif
+
 #if HAS_DISPLAY
 #include "display_manager.h"
 #include "screen_saver_manager.h"
@@ -28,7 +33,11 @@ bool config_loaded = false;
 BleKeyboardManager ble_keyboard;
 
 // Macro buttons (persisted separately from DeviceConfig)
+#if defined(ARDUINO_ARCH_ESP32) && SOC_SPIRAM_SUPPORTED
+EXT_RAM_ATTR MacroConfig macro_config;
+#else
 MacroConfig macro_config;
+#endif
 
 #if HAS_MQTT
 MqttManager mqtt_manager;

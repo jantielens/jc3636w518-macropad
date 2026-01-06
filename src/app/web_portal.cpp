@@ -17,6 +17,7 @@
 #include "log_manager.h"
 #include "board_config.h"
 #include "macros_config.h"
+#include "macro_templates.h"
 #include "device_telemetry.h"
 #include "github_release_config.h"
 #include "../version.h"
@@ -91,16 +92,15 @@ static bool ota_in_progress = false;
 static size_t ota_progress = 0;
 static size_t ota_total = 0;
 
-// ===== Macros Config (8x9 buttons) =====
-static MacroConfig g_macros;
+// ===== Macros Config (screens × buttons) =====
 static bool g_macros_loaded = false;
 static uint8_t* g_macros_body = nullptr;
 static size_t g_macros_body_total = 0;
 static bool g_macros_body_in_progress = false;
 
-// MVP: macros editor posts the full 8×9 config. Keep the parsing document bounded.
+// MVP: macros editor posts the full screens × buttons config. Keep the parsing document bounded.
 // If MACROS_* dimensions or max string sizes are increased, adjust this accordingly.
-static constexpr size_t kMacrosJsonDocCapacity = 32768;
+static constexpr size_t kMacrosJsonDocCapacity = 65536;
 
 // Protect macros upload globals from theoretical cross-task interleaving.
 static portMUX_TYPE g_macros_body_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -190,12 +190,9 @@ static MacroButtonAction macro_action_from_string(const char* s) {
 static void macros_cache_load_if_needed() {
     if (g_macros_loaded) return;
     g_macros_loaded = true;
-    if (!macros_config_load(&g_macros)) {
-        macros_config_set_defaults(&g_macros);
+    if (!macros_config_load(&macro_config)) {
+        macros_config_set_defaults(&macro_config);
     }
-
-    // Keep the on-device runtime config in sync so changes apply immediately.
-    memcpy(&macro_config, &g_macros, sizeof(MacroConfig));
 }
 
 // GET /api/macros
@@ -205,14 +202,66 @@ void handleGetMacros(AsyncWebServerRequest *request) {
     macros_cache_load_if_needed();
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
-    response->print("{\"success\":true,\"version\":1,\"screens\":[");
+    response->print("{\"success\":true,\"version\":4,\"buttons_per_screen\":");
+    response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
+
+    // Templates (for the web editor)
+    response->print(",\"templates\":[");
+    {
+        const char* id = macro_templates::kTemplateRoundRing9;
+        response->print("{\"id\":\"");
+        response->print(id);
+        response->print("\",\"name\":\"");
+        response->print(macro_templates::display_name(id));
+        response->print("\",\"selector_layout\":");
+        response->print(macro_templates::selector_layout_json(id));
+        response->print("}");
+    }
+    response->print(",");
+    {
+        const char* id = macro_templates::kTemplateStackSides5;
+        response->print("{\"id\":\"");
+        response->print(id);
+        response->print("\",\"name\":\"");
+        response->print(macro_templates::display_name(id));
+        response->print("\",\"selector_layout\":");
+        response->print(macro_templates::selector_layout_json(id));
+        response->print("}");
+    }
+    response->print(",");
+    {
+        const char* id = macro_templates::kTemplateWideSides3;
+        response->print("{\"id\":\"");
+        response->print(id);
+        response->print("\",\"name\":\"");
+        response->print(macro_templates::display_name(id));
+        response->print("\",\"selector_layout\":");
+        response->print(macro_templates::selector_layout_json(id));
+        response->print("}");
+    }
+    response->print(",");
+    {
+        const char* id = macro_templates::kTemplateSplitSides4;
+        response->print("{\"id\":\"");
+        response->print(id);
+        response->print("\",\"name\":\"");
+        response->print(macro_templates::display_name(id));
+        response->print("\",\"selector_layout\":");
+        response->print(macro_templates::selector_layout_json(id));
+        response->print("}");
+    }
+    response->print("]");
+
+    response->print(",\"screens\":[");
 
     for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
         if (s > 0) response->print(",");
-        response->print("{\"buttons\":[");
+        response->print("{\"template\":\"");
+        response->print(macro_config.template_id[s]);
+        response->print("\",\"buttons\":[");
 
         for (int b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
-            const MacroButtonConfig *btn = &g_macros.buttons[s][b];
+            const MacroButtonConfig *btn = &macro_config.buttons[s][b];
             if (b > 0) response->print(",");
 
             // Use ArduinoJson to correctly escape strings, but keep the document tiny.
@@ -232,7 +281,7 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 }
 
 // POST /api/macros
-// Accepts a single JSON payload containing all 8x9 buttons.
+// Accepts a single JSON payload containing all screens × buttons.
 void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
     if (!portal_auth_gate(request)) return;
 
@@ -345,6 +394,14 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             return;
         }
         JsonObject so = sv.as<JsonObject>();
+
+        // Optional template selection (defaults to the firmware default if missing/invalid).
+        const char* tpl = so["template"] | macro_templates::default_id();
+        if (!macro_templates::is_valid(tpl)) {
+            tpl = macro_templates::default_id();
+        }
+        strlcpy(next->template_id[s], tpl, sizeof(next->template_id[s]));
+
         if (!so.containsKey("buttons") || !so["buttons"].is<JsonArray>()) {
             free(next);
             request->send(400, "application/json", "{\"success\":false,\"message\":\"Each screen must have buttons[]\"}");
@@ -353,7 +410,7 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
         JsonArray buttons = so["buttons"].as<JsonArray>();
         if ((int)buttons.size() != MACROS_BUTTONS_PER_SCREEN) {
             free(next);
-            request->send(400, "application/json", "{\"success\":false,\"message\":\"buttons[] must have length 9\"}");
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"buttons[] has wrong length\"}");
             return;
         }
 
@@ -390,11 +447,10 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
         return;
     }
 
-    g_macros = *next;
     g_macros_loaded = true;
 
     // Apply immediately to the runtime macro UI.
-    memcpy(&macro_config, &g_macros, sizeof(MacroConfig));
+    memcpy(&macro_config, next, sizeof(MacroConfig));
 
     free(next);
 

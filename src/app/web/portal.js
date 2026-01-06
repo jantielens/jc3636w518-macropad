@@ -30,19 +30,19 @@ let githubAutoChecked = false;
 // for debugging. The UI adapts to whatever /api/macros returns.
 const MACROS_SCREEN_COUNT_DEFAULT = 8;
 let macrosScreenCount = MACROS_SCREEN_COUNT_DEFAULT;
-const MACROS_BUTTONS_PER_SCREEN = 9;
+const MACROS_BUTTONS_PER_SCREEN_DEFAULT = 16;
+let macrosButtonsPerScreen = MACROS_BUTTONS_PER_SCREEN_DEFAULT;
 
 // Macro button selector visualization (Option B / KISS): a small grid layout spec.
 // This keeps today's 3×3 macropad layout but makes it data-driven for future templates.
 // Cells contain 0-based slot indices (or null for empty spaces).
 const MACROS_SELECTOR_LAYOUT_DEFAULT = {
-    columns: 3,
+    columns: 4,
     cells: [
-        // Visual orientation: button #1 at 12 o'clock.
-        // (Index mapping is purely for the editor UI; the underlying 0-based slot indices stay the same.)
-        7, 0, 1,
-        6, 8, 2,
-        5, 4, 3,
+        0, 1, 2, 3,
+        4, 5, 6, 7,
+        8, 9, 10, 11,
+        12, 13, 14, 15,
     ],
 };
 let macrosSelectorLayout = MACROS_SELECTOR_LAYOUT_DEFAULT;
@@ -53,10 +53,31 @@ const MACROS_SCRIPT_MAX = 255;
 const MACROS_ICON_ID_MAX = 31;
 
 let macrosPayloadCache = null; // { screens: [ { buttons: [ {label, action, script, icon_id}, ... ] }, ... ] }
+let macrosTemplatesCache = []; // [{id,name,selector_layout}, ...]
 let macrosSelectedScreen = 0; // 0-based
 let macrosSelectedButton = 0; // 0-based
 let macrosDirty = false;
 let macrosLoading = false;
+
+function macrosGetSelectedTemplateId() {
+    if (!macrosPayloadCache) return '';
+    const s = macrosPayloadCache.screens[macrosSelectedScreen];
+    return (s && s.template) ? String(s.template) : '';
+}
+
+function macrosFindTemplateById(id) {
+    const key = (id || '').toString();
+    return macrosTemplatesCache.find(t => t && t.id === key) || null;
+}
+
+function macrosApplyTemplateLayout() {
+    const tpl = macrosFindTemplateById(macrosGetSelectedTemplateId());
+    if (tpl && tpl.selector_layout) {
+        macrosSelectorLayout = tpl.selector_layout;
+    } else {
+        macrosSelectorLayout = MACROS_SELECTOR_LAYOUT_DEFAULT;
+    }
+}
 
 function macrosSetDirty(dirty) {
     macrosDirty = !!dirty;
@@ -72,10 +93,10 @@ function macrosCreateEmptyPayload() {
     const payload = { screens: [] };
     for (let s = 0; s < macrosScreenCount; s++) {
         const buttons = [];
-        for (let b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
+        for (let b = 0; b < macrosButtonsPerScreen; b++) {
             buttons.push(macrosCreateEmptyButton());
         }
-        payload.screens.push({ buttons });
+        payload.screens.push({ template: 'round_ring_9', buttons });
     }
     return payload;
 }
@@ -84,11 +105,19 @@ function macrosNormalizePayload(payload) {
     const out = macrosCreateEmptyPayload();
     if (!payload || !Array.isArray(payload.screens)) return out;
 
+    if (Array.isArray(payload.templates)) {
+        macrosTemplatesCache = payload.templates;
+    }
+
     for (let s = 0; s < Math.min(macrosScreenCount, payload.screens.length); s++) {
         const screen = payload.screens[s];
         if (!screen || !Array.isArray(screen.buttons)) continue;
 
-        for (let b = 0; b < Math.min(MACROS_BUTTONS_PER_SCREEN, screen.buttons.length); b++) {
+        if (screen.template) {
+            out.screens[s].template = String(screen.template);
+        }
+
+        for (let b = 0; b < Math.min(macrosButtonsPerScreen, screen.buttons.length); b++) {
             const btn = screen.buttons[b] || {};
             out.screens[s].buttons[b] = {
                 label: (btn.label || ''),
@@ -100,6 +129,31 @@ function macrosNormalizePayload(payload) {
     }
 
     return out;
+}
+
+function macrosRenderTemplateSelect() {
+    const select = document.getElementById('macro_template_select');
+    if (!select) return;
+
+    // Ensure we have something to show.
+    const templates = Array.isArray(macrosTemplatesCache) && macrosTemplatesCache.length > 0
+        ? macrosTemplatesCache
+        : [{ id: 'round_ring_9', name: 'Round Ring (9)' }];
+
+    // Rebuild options if needed.
+    if (select.options.length !== templates.length) {
+        select.innerHTML = '';
+        for (const t of templates) {
+            if (!t || !t.id) continue;
+            const opt = document.createElement('option');
+            opt.value = String(t.id);
+            opt.textContent = t.name ? String(t.name) : String(t.id);
+            select.appendChild(opt);
+        }
+    }
+
+    const current = macrosGetSelectedTemplateId() || 'round_ring_9';
+    select.value = current;
 }
 
 function macrosClampString(value, maxLen) {
@@ -120,7 +174,8 @@ function macrosGetSelectedButton() {
 
 function macrosSlotTitle(slotIndex) {
     const slot = slotIndex + 1;
-    return slot === 9 ? 'Center (#9)' : `#${slot}`;
+    if (macrosButtonsPerScreen === 9 && slot === 9) return 'Center (#9)';
+    return `#${slot}`;
 }
 
 function macrosUpdateScriptCharCounter() {
@@ -174,7 +229,7 @@ function macrosRenderButtonGrid() {
         }
 
         const slotIndex = parseInt(cell, 10);
-        if (!(slotIndex >= 0 && slotIndex < MACROS_BUTTONS_PER_SCREEN)) {
+        if (!(slotIndex >= 0 && slotIndex < macrosButtonsPerScreen)) {
             const spacer = document.createElement('div');
             spacer.className = 'macro-button macro-button--spacer';
             spacer.setAttribute('aria-hidden', 'true');
@@ -270,7 +325,9 @@ function macrosRenderEditorFields() {
 }
 
 function macrosRenderAll() {
+    macrosApplyTemplateLayout();
     macrosRenderScreenSelect();
+    macrosRenderTemplateSelect();
     macrosRenderButtonGrid();
     macrosRenderEditorFields();
 }
@@ -281,6 +338,19 @@ function macrosBindEditorEvents() {
         screenSelect.addEventListener('change', () => {
             macrosSelectedScreen = parseInt(screenSelect.value, 10) || 0;
             macrosSelectedButton = 0;
+            macrosRenderAll();
+        });
+    }
+
+    const templateSelect = document.getElementById('macro_template_select');
+    if (templateSelect) {
+        templateSelect.addEventListener('change', () => {
+            if (!macrosPayloadCache) return;
+            const screen = macrosPayloadCache.screens[macrosSelectedScreen];
+            if (!screen) return;
+            screen.template = templateSelect.value || 'round_ring_9';
+            macrosSelectedButton = 0;
+            macrosSetDirty(true);
             macrosRenderAll();
         });
     }
@@ -363,6 +433,20 @@ async function loadMacros() {
         }
 
         const payload = await response.json();
+
+        if (payload && Array.isArray(payload.templates)) {
+            macrosTemplatesCache = payload.templates;
+        }
+
+        // Keep the editor in sync with the firmware.
+        // Preferred: buttons_per_screen (firmware v2+). Fallback: infer from first screen.
+        if (payload && typeof payload.buttons_per_screen === 'number' && payload.buttons_per_screen > 0) {
+            macrosButtonsPerScreen = payload.buttons_per_screen;
+        } else if (payload && Array.isArray(payload.screens) && payload.screens[0] && Array.isArray(payload.screens[0].buttons)) {
+            macrosButtonsPerScreen = payload.screens[0].buttons.length;
+        } else {
+            macrosButtonsPerScreen = MACROS_BUTTONS_PER_SCREEN_DEFAULT;
+        }
         if (payload && Array.isArray(payload.screens) && payload.screens.length > 0) {
             macrosScreenCount = payload.screens.length;
         } else {
@@ -390,8 +474,8 @@ function macrosValidatePayload(payload) {
     }
     for (let s = 0; s < macrosScreenCount; s++) {
         const screen = payload.screens[s];
-        if (!screen || !Array.isArray(screen.buttons) || screen.buttons.length !== MACROS_BUTTONS_PER_SCREEN) {
-            return { valid: false, message: `Invalid payload (screen ${s + 1} must have ${MACROS_BUTTONS_PER_SCREEN} buttons)` };
+        if (!screen || !Array.isArray(screen.buttons) || screen.buttons.length !== macrosButtonsPerScreen) {
+            return { valid: false, message: `Invalid payload (screen ${s + 1} must have ${macrosButtonsPerScreen} buttons)` };
         }
     }
     return { valid: true, message: 'OK' };
@@ -405,7 +489,7 @@ async function saveMacros(options = {}) {
     // Normalize + clamp before sending.
     const payload = macrosNormalizePayload(macrosPayloadCache);
     for (let s = 0; s < macrosScreenCount; s++) {
-        for (let b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
+        for (let b = 0; b < macrosButtonsPerScreen; b++) {
             const btn = payload.screens[s].buttons[b];
             btn.label = macrosClampString(btn.label, MACROS_LABEL_MAX);
             btn.action = (btn.action || 'none');
@@ -463,6 +547,7 @@ function initMacrosEditor() {
     // Start with an empty payload so the UI is responsive immediately.
     // This uses the default screen count until /api/macros tells us otherwise.
     macrosScreenCount = MACROS_SCREEN_COUNT_DEFAULT;
+    macrosButtonsPerScreen = MACROS_BUTTONS_PER_SCREEN_DEFAULT;
     macrosPayloadCache = macrosCreateEmptyPayload();
     macrosRenderAll();
 
