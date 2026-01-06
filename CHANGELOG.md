@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.2] - 2026-01-06
+
+### Fixed
+- Fix GitHub Pages / ESP Web Tools installer flashing by writing bootloader + partition table + boot_app0 + app at explicit offsets (instead of flashing a merged image at offset 0).
+
+### Added
+- Add a minimal partition table parser (`tools/parse_esp32_partitions.py`) so the installer can derive the correct `app0` offset from `*.partitions.bin`.
+- Package `boot_app0.bin` in release assets and rehydrate it in the Pages deploy workflow.
+
 ## [1.0.1] - 2026-01-06
 
 ### Fixed

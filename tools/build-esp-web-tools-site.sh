@@ -167,19 +167,58 @@ for board_name in "${boards[@]}"; do
   chip_family="$(get_chip_family_for_fqbn "$fqbn")"
 
   src_dir="$REPO_ROOT/build/$board_name"
-  merged_bin="$src_dir/app.ino.merged.bin"
+  app_bin="$src_dir/app.ino.bin"
+  bootloader_bin="$src_dir/app.ino.bootloader.bin"
+  partitions_bin="$src_dir/app.ino.partitions.bin"
+  boot_app0_bin="$src_dir/app.ino.boot_app0.bin"
 
-  if [[ ! -f "$merged_bin" ]]; then
-    echo "ERROR: Missing merged firmware for $board_name at $merged_bin" >&2
+  if [[ ! -f "$app_bin" ]]; then
+    echo "ERROR: Missing app firmware for $board_name at $app_bin" >&2
+    echo "Hint: run ./build.sh $board_name first" >&2
+    exit 1
+  fi
+  if [[ ! -f "$bootloader_bin" ]]; then
+    echo "ERROR: Missing bootloader firmware for $board_name at $bootloader_bin" >&2
+    echo "Hint: run ./build.sh $board_name first" >&2
+    exit 1
+  fi
+  if [[ ! -f "$partitions_bin" ]]; then
+    echo "ERROR: Missing partitions firmware for $board_name at $partitions_bin" >&2
     echo "Hint: run ./build.sh $board_name first" >&2
     exit 1
   fi
 
+  # boot_app0.bin is part of the standard ESP32 flashing layout and is typically
+  # flashed at 0xE000. Some setups will work without it, but including it makes
+  # the web installer more robust across fresh/previously-flashed devices.
+  if [[ ! -f "$boot_app0_bin" ]]; then
+    # Fallback: locate boot_app0.bin from the locally installed Arduino ESP32 core.
+    boot_app0_bin=""
+    while IFS= read -r -d '' candidate; do
+      boot_app0_bin="$candidate"
+      break
+    done < <(find "${HOME}/.arduino15/packages/esp32/hardware/esp32" -type f -name "boot_app0.bin" -path "*/tools/partitions/*" -print0 2>/dev/null || true)
+  fi
+  if [[ -z "${boot_app0_bin}" || ! -f "${boot_app0_bin}" ]]; then
+    echo "ERROR: Missing boot_app0.bin for $board_name" >&2
+    echo "Expected either: $src_dir/app.ino.boot_app0.bin" >&2
+    echo "Or a locally installed Arduino ESP32 core providing tools/partitions/boot_app0.bin" >&2
+    exit 1
+  fi
+
+  # Determine the app0 offset from the built partition table.
+  # This is critical for custom layouts where app0 is not at 0x10000.
+  app_offset_hex="$(python3 "$REPO_ROOT/tools/parse_esp32_partitions.py" "$partitions_bin" --label app0 --print offset-hex)"
+  app_offset_dec=$((app_offset_hex))
+
   dst_dir="$OUT_DIR/firmware/$board_name"
   mkdir -p "$dst_dir"
 
-  # Stable filename; add cache-busting query param in manifest.
-  cp "$merged_bin" "$dst_dir/firmware.bin"
+  # Stable filenames; add cache-busting query param in manifest.
+  cp "$bootloader_bin" "$dst_dir/bootloader.bin"
+  cp "$partitions_bin" "$dst_dir/partitions.bin"
+  cp "$boot_app0_bin" "$dst_dir/boot_app0.bin"
+  cp "$app_bin" "$dst_dir/app.bin"
 
   manifest_path="$OUT_DIR/manifests/$board_name.json"
 
@@ -192,7 +231,10 @@ for board_name in "${boards[@]}"; do
     {
       "chipFamily": "${chip_family}",
       "parts": [
-        { "path": "../firmware/${board_name}/firmware.bin?v=${SHA_SHORT}", "offset": 0 }
+        { "path": "../firmware/${board_name}/bootloader.bin?v=${SHA_SHORT}", "offset": 0 },
+        { "path": "../firmware/${board_name}/partitions.bin?v=${SHA_SHORT}", "offset": 32768 },
+        { "path": "../firmware/${board_name}/boot_app0.bin?v=${SHA_SHORT}", "offset": 57344 },
+        { "path": "../firmware/${board_name}/app.bin?v=${SHA_SHORT}", "offset": ${app_offset_dec} }
       ]
     }
   ]
@@ -204,9 +246,13 @@ EOF
             <div>
               <div class="board-title">${board_name}</div>
               <div class="board-sub">Chip: <code>${chip_family}</code></div>
+              <div class="board-sub">App offset: <code>${app_offset_hex}</code></div>
               <div class="board-links">
                 <a href="./manifests/${board_name}.json">manifest</a>
-                <a href="./firmware/${board_name}/firmware.bin">firmware</a>
+                <a href="./firmware/${board_name}/app.bin">app</a>
+                <a href="./firmware/${board_name}/bootloader.bin">bootloader</a>
+                <a href="./firmware/${board_name}/partitions.bin">partitions</a>
+                <a href="./firmware/${board_name}/boot_app0.bin">boot_app0</a>
               </div>
             </div>
             <div>

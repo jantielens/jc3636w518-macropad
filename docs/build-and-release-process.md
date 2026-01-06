@@ -339,9 +339,16 @@ The project uses an automated release workflow that triggers on version tags. Re
 
 This repository includes a static firmware installer site (no backend) powered by ESP Web Tools. It is deployed to GitHub Pages from **stable GitHub Releases**.
 
-### Why merged firmware is required
+### Why multi-part flashing is used
 
-The browser installer flashes a single firmware image at offset `0`. For this, the installer uses the Arduino build output `app.ino.merged.bin` (bootloader + partitions + app).
+The browser installer flashes **multiple parts at explicit offsets**:
+
+- Bootloader at offset `0x0`
+- Partition table at offset `0x8000`
+- `boot_app0` at offset `0xE000`
+- App at the `app0` offset defined by the built partition table (example: `0x20000`)
+
+This avoids relying on `app.ino.merged.bin`, which can be incorrect for custom partition layouts where `app0` is not at the default `0x10000`.
 
 ### Same-origin requirement (CORS)
 
@@ -352,10 +359,10 @@ To avoid CORS issues in browsers, the **installer page**, **manifest JSON**, and
 - **Trigger**: `.github/workflows/pages-from-release.yml` runs on `release.published` and refuses pre-releases.
 - **Manual deploy**: The same workflow supports `workflow_dispatch` with a `tag_name` input (still refuses pre-releases).
 - **Inputs**:
-  - Downloads `*-merged.bin` assets from the release.
+  - Downloads firmware `.bin` assets from the release (app + bootloader + partitions + boot_app0).
   - Fetches the release body into `release-notes.md`.
-  - Rehydrates `build/<board>/app.ino.merged.bin` so the site generator can run without rebuilding firmware.
-- **Output**: `tools/build-esp-web-tools-site.sh` generates `site/` (HTML, `manifests/*.json`, `firmware/<board>/firmware.bin`) which is deployed via GitHub Pages “Source: GitHub Actions”.
+  - Rehydrates `build/<board>/app.ino.bin`, `app.ino.bootloader.bin`, `app.ino.partitions.bin`, and `app.ino.boot_app0.bin` so the site generator can run without rebuilding firmware.
+- **Output**: `tools/build-esp-web-tools-site.sh` generates `site/` (HTML, `manifests/*.json`, `firmware/<board>/*.bin`) which is deployed via GitHub Pages “Source: GitHub Actions”.
 
 ---
 
@@ -406,7 +413,10 @@ git push origin v0.0.5
 - Extracts changelog section for v0.0.5
 - Creates GitHub Release with:
   - `esp32-template-esp32-nodisplay-v0.0.5.bin` (app-only)
-  - `esp32-template-esp32-nodisplay-v0.0.5-merged.bin` (ESP Web Tools / flashes at offset 0)
+  - `esp32-template-esp32-nodisplay-v0.0.5-bootloader.bin` (bootloader)
+  - `esp32-template-esp32-nodisplay-v0.0.5-partitions.bin` (partition table)
+  - `esp32-template-esp32-nodisplay-v0.0.5-boot_app0.bin` (OTA boot helper)
+  - `esp32-template-esp32-nodisplay-v0.0.5-merged.bin` (convenience merged image)
   - `SHA256SUMS.txt`
 - Release notes populated from CHANGELOG.md (no auto-generated “What’s Changed” section)
 - Debug symbols (`.elf`) and build metadata available in workflow artifacts
