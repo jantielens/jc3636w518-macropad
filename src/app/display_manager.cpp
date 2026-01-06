@@ -272,13 +272,14 @@ void DisplayManager::lvglTask(void* pvParameter) {
             mgr->currentScreen = target;
             mgr->currentScreen->show();
             mgr->pendingScreen = nullptr;
+            const char* appliedId = mgr->getScreenIdForInstance(mgr->currentScreen);
 
             #if HAS_IMAGE_API
             // Keep the flush gate in sync with the active screen.
             mgr->directImageActive = (mgr->currentScreen == &mgr->directImageScreen);
             #endif
 
-            const char* screenId = mgr->getScreenIdForInstance(mgr->currentScreen);
+            const char* screenId = appliedId;
             Logger.logMessagef("Display", "Switched to %s", screenId ? screenId : "(unregistered)");
         }
         

@@ -32,6 +32,21 @@ const MACROS_SCREEN_COUNT_DEFAULT = 8;
 let macrosScreenCount = MACROS_SCREEN_COUNT_DEFAULT;
 const MACROS_BUTTONS_PER_SCREEN = 9;
 
+// Macro button selector visualization (Option B / KISS): a small grid layout spec.
+// This keeps today's 3×3 macropad layout but makes it data-driven for future templates.
+// Cells contain 0-based slot indices (or null for empty spaces).
+const MACROS_SELECTOR_LAYOUT_DEFAULT = {
+    columns: 3,
+    cells: [
+        // Visual orientation: button #1 at 12 o'clock.
+        // (Index mapping is purely for the editor UI; the underlying 0-based slot indices stay the same.)
+        7, 0, 1,
+        6, 8, 2,
+        5, 4, 3,
+    ],
+};
+let macrosSelectorLayout = MACROS_SELECTOR_LAYOUT_DEFAULT;
+
 // Keep in sync with src/app/macros_config.h (char arrays include NUL terminator).
 const MACROS_LABEL_MAX = 15;
 const MACROS_SCRIPT_MAX = 255;
@@ -108,18 +123,11 @@ function macrosSlotTitle(slotIndex) {
     return slot === 9 ? 'Center (#9)' : `#${slot}`;
 }
 
-function macrosRenderButtonSelect() {
-    const select = document.getElementById('macro_button_select');
-    if (!select) return;
-
-    select.innerHTML = '';
-    for (let i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
-        const opt = document.createElement('option');
-        opt.value = String(i);
-        opt.textContent = macrosSlotTitle(i);
-        if (i === macrosSelectedButton) opt.selected = true;
-        select.appendChild(opt);
-    }
+function macrosUpdateScriptCharCounter() {
+    const charsEl = document.getElementById('macro_script_chars');
+    if (!charsEl) return;
+    const cfg = macrosGetSelectedButton();
+    charsEl.textContent = cfg && cfg.script ? String(cfg.script.length) : '0';
 }
 
 function macrosRenderScreenSelect() {
@@ -147,14 +155,33 @@ function macrosRenderButtonGrid() {
         return;
     }
 
-    // 3×3 representation with the center button in the middle.
-    // Indices here are 0-based button slots.
-    const order = [0, 1, 2,
-                   7, 8, 3,
-                   6, 5, 4];
+    const layout = macrosSelectorLayout || MACROS_SELECTOR_LAYOUT_DEFAULT;
+    const cols = Math.max(1, parseInt(layout.columns, 10) || 3);
+    const cells = Array.isArray(layout.cells) ? layout.cells : MACROS_SELECTOR_LAYOUT_DEFAULT.cells;
+
+    // Apply columns from layout spec.
+    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
 
     grid.innerHTML = '';
-    for (const slotIndex of order) {
+    for (const cell of cells) {
+        // Empty spacer cell
+        if (cell === null || cell === undefined) {
+            const spacer = document.createElement('div');
+            spacer.className = 'macro-button macro-button--spacer';
+            spacer.setAttribute('aria-hidden', 'true');
+            grid.appendChild(spacer);
+            continue;
+        }
+
+        const slotIndex = parseInt(cell, 10);
+        if (!(slotIndex >= 0 && slotIndex < MACROS_BUTTONS_PER_SCREEN)) {
+            const spacer = document.createElement('div');
+            spacer.className = 'macro-button macro-button--spacer';
+            spacer.setAttribute('aria-hidden', 'true');
+            grid.appendChild(spacer);
+            continue;
+        }
+
         const cfg = macrosPayloadCache.screens[macrosSelectedScreen].buttons[slotIndex];
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -169,7 +196,21 @@ function macrosRenderButtonGrid() {
         subtitle.className = 'macro-button-subtitle';
         const label = (cfg && cfg.label) ? cfg.label : '';
         const action = (cfg && cfg.action) ? cfg.action : 'none';
-        subtitle.textContent = label ? label : (action === 'none' ? '—' : action);
+
+        // Keep it user-friendly: show a short hint when there is no label.
+        if (label) {
+            subtitle.textContent = label;
+        } else if (action === 'none') {
+            subtitle.textContent = '—';
+        } else if (action === 'send_keys') {
+            subtitle.textContent = 'Keys Script';
+        } else if (action === 'nav_prev') {
+            subtitle.textContent = 'Previous';
+        } else if (action === 'nav_next') {
+            subtitle.textContent = 'Next';
+        } else {
+            subtitle.textContent = action;
+        }
 
         btn.appendChild(title);
         btn.appendChild(subtitle);
@@ -191,6 +232,7 @@ function macrosRenderEditorFields() {
     const labelEl = document.getElementById('macro_label');
     const actionEl = document.getElementById('macro_action');
     const scriptEl = document.getElementById('macro_script');
+    const scriptGroupEl = document.getElementById('macro_script_group');
     const iconEl = document.getElementById('macro_icon_id');
 
     if (!cfg) {
@@ -198,6 +240,8 @@ function macrosRenderEditorFields() {
         if (actionEl) actionEl.value = 'none';
         if (scriptEl) scriptEl.value = '';
         if (iconEl) iconEl.value = '';
+        if (scriptGroupEl) scriptGroupEl.style.display = 'none';
+        macrosUpdateScriptCharCounter();
         return;
     }
 
@@ -209,10 +253,14 @@ function macrosRenderEditorFields() {
     const action = (cfg.action || 'none');
     const scriptEnabled = macrosActionSupportsScript(action);
 
+    // Script UI: only show it for Keys Script action.
+    if (scriptGroupEl) scriptGroupEl.style.display = scriptEnabled ? 'block' : 'none';
     if (scriptEl) {
-        scriptEl.disabled = !scriptEnabled;
+        scriptEl.disabled = false;
         if (!scriptEnabled) scriptEl.value = '';
     }
+
+    macrosUpdateScriptCharCounter();
 
     if (iconEl) {
         // Keep editable so users can pre-assign stable IDs, but grey it out for None.
@@ -223,7 +271,6 @@ function macrosRenderEditorFields() {
 
 function macrosRenderAll() {
     macrosRenderScreenSelect();
-    macrosRenderButtonSelect();
     macrosRenderButtonGrid();
     macrosRenderEditorFields();
 }
@@ -234,14 +281,6 @@ function macrosBindEditorEvents() {
         screenSelect.addEventListener('change', () => {
             macrosSelectedScreen = parseInt(screenSelect.value, 10) || 0;
             macrosSelectedButton = 0;
-            macrosRenderAll();
-        });
-    }
-
-    const buttonSelect = document.getElementById('macro_button_select');
-    if (buttonSelect) {
-        buttonSelect.addEventListener('change', () => {
-            macrosSelectedButton = parseInt(buttonSelect.value, 10) || 0;
             macrosRenderAll();
         });
     }
@@ -276,12 +315,21 @@ function macrosBindEditorEvents() {
 
     const scriptEl = document.getElementById('macro_script');
     if (scriptEl) {
+        // Guard against odd captive-browser/mobile behavior that sometimes treats Enter as form-submit.
+        // We still want newlines in the textarea, so do NOT preventDefault.
+        scriptEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.stopPropagation();
+            }
+        });
+
         scriptEl.addEventListener('input', () => {
             const cfg = macrosGetSelectedButton();
             if (!cfg) return;
             cfg.script = macrosClampString(scriptEl.value, MACROS_SCRIPT_MAX);
             if (scriptEl.value !== cfg.script) scriptEl.value = cfg.script;
             macrosSetDirty(true);
+            macrosUpdateScriptCharCounter();
         });
     }
 
@@ -296,12 +344,6 @@ function macrosBindEditorEvents() {
         });
     }
 
-    const reloadBtn = document.getElementById('macros_reload_btn');
-    if (reloadBtn) {
-        reloadBtn.addEventListener('click', () => {
-            loadMacros();
-        });
-    }
 }
 
 async function loadMacros() {

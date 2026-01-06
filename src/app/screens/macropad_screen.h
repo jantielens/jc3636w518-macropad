@@ -36,12 +36,15 @@ private:
     lv_obj_t* screen;
     lv_obj_t* buttons[9];
     lv_obj_t* labels[9];
+    lv_obj_t* emptyStateLabel;
     ButtonCtx buttonCtx[9];
 
     uint32_t lastUpdateMs;
 
     void layoutButtons();
     void refreshButtons(bool force);
+
+    void updateEmptyState(bool anyButtonConfigured);
 
     const MacroConfig* getMacroConfig() const;
     BleKeyboardManager* getBleKeyboard() const;

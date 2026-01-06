@@ -5,16 +5,16 @@
 #include "../ble_keyboard_manager.h"
 #include "../ducky_script.h"
 #include "../log_manager.h"
+#include "../config_manager.h"
 
 #if HAS_DISPLAY
 #include "../screen_saver_manager.h"
 #endif
 
 #include <math.h>
-
-#include <esp_heap_caps.h>
 #include <esp_system.h>
-#include <esp32-hal-psram.h>
+
+#include <WiFi.h>
 
 namespace {
 
@@ -44,33 +44,6 @@ static void defaultLabel(char* out, size_t outLen, uint8_t screenIndex, uint8_t 
     snprintf(out, outLen, "S%u-B%u", (unsigned)(screenIndex + 1), (unsigned)(buttonIndex + 1));
 }
 
-static void log_heap_snapshot(const char* phase, uint8_t screenIndex) {
-    const size_t hi = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    const size_t himin = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    const size_t hilargest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-
-    size_t hp = 0, hpmin = 0, hplargest = 0;
-#if SOC_SPIRAM_SUPPORTED
-    if (psramFound()) {
-        hp = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        hpmin = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        hplargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-#endif
-
-    Logger.logMessagef(
-        "MacroPad",
-        "LVGL create %s: screen=%u hi=%u himin=%u hilargest=%u hp=%u hpmin=%u hplargest=%u",
-        phase,
-        (unsigned)(screenIndex + 1),
-        (unsigned)hi,
-        (unsigned)himin,
-        (unsigned)hilargest,
-        (unsigned)hp,
-        (unsigned)hpmin,
-        (unsigned)hplargest);
-}
-
 } // namespace
 
 MacroPadScreen::MacroPadScreen(DisplayManager* manager, uint8_t idx)
@@ -87,6 +60,8 @@ void MacroPadScreen::configure(DisplayManager* manager, uint8_t idx) {
         labels[i] = nullptr;
         buttonCtx[i] = {this, (uint8_t)i};
     }
+
+    emptyStateLabel = nullptr;
 
     lastUpdateMs = 0;
 }
@@ -107,9 +82,6 @@ BleKeyboardManager* MacroPadScreen::getBleKeyboard() const {
 
 void MacroPadScreen::create() {
     if (screen) return;
-
-    // Log memory cost of the LVGL object tree. This only runs once per screen.
-    log_heap_snapshot("before", screenIndex);
 
     screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
@@ -142,10 +114,20 @@ void MacroPadScreen::create() {
         labels[i] = lbl;
     }
 
+    // Empty-state helper (shown only on Macro Screen 1 when no macros are configured).
+    emptyStateLabel = lv_label_create(screen);
+    lv_obj_set_style_text_align(emptyStateLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(emptyStateLabel, lv_color_make(180, 180, 180), 0);
+    lv_label_set_long_mode(emptyStateLabel, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(emptyStateLabel, lv_pct(92));
+    lv_obj_align(emptyStateLabel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(emptyStateLabel, LV_OBJ_FLAG_CLICKABLE);
+    lv_label_set_text(emptyStateLabel, "");
+    lv_obj_add_flag(emptyStateLabel, LV_OBJ_FLAG_HIDDEN);
+
     layoutButtons();
     refreshButtons(true);
 
-    log_heap_snapshot("after", screenIndex);
 }
 
 void MacroPadScreen::destroy() {
@@ -158,6 +140,8 @@ void MacroPadScreen::destroy() {
         buttons[i] = nullptr;
         labels[i] = nullptr;
     }
+
+    emptyStateLabel = nullptr;
 
     lastUpdateMs = 0;
 }
@@ -250,8 +234,14 @@ void MacroPadScreen::refreshButtons(bool force) {
     const MacroConfig* cfg = getMacroConfig();
     if (!cfg) return;
 
+    bool anyButtonConfigured = false;
+
     for (int i = 0; i < 9; i++) {
         const MacroButtonConfig* btnCfg = &cfg->buttons[screenIndex][i];
+
+        if (btnCfg->action != MacroButtonAction::None) {
+            anyButtonConfigured = true;
+        }
 
         const bool visible = btnCfg->action != MacroButtonAction::None;
         setButtonVisible(buttons[i], visible);
@@ -273,6 +263,61 @@ void MacroPadScreen::refreshButtons(bool force) {
             lv_label_set_text(labels[i], labelText);
         }
     }
+
+    updateEmptyState(anyButtonConfigured);
+}
+
+void MacroPadScreen::updateEmptyState(bool anyButtonConfigured) {
+    // Show on any Macro Screen when it's empty.
+    if (!emptyStateLabel) return;
+
+    if (anyButtonConfigured) {
+        lv_obj_add_flag(emptyStateLabel, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    // Determine which IP to show (STA or AP mode).
+    String ipStr;
+    if (WiFi.status() == WL_CONNECTED) {
+        ipStr = WiFi.localIP().toString();
+    } else if (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) {
+        ipStr = WiFi.softAPIP().toString();
+    } else {
+        ipStr = "0.0.0.0";
+    }
+
+    // Determine mDNS hostname. Prefer sanitized device_name; fall back to WiFi hostname if present.
+    char mdnsHost[CONFIG_DEVICE_NAME_MAX_LEN] = {0};
+    if (displayMgr && displayMgr->getConfig()) {
+        config_manager_sanitize_device_name(displayMgr->getConfig()->device_name, mdnsHost, sizeof(mdnsHost));
+    }
+    const char* wifiHost = WiFi.getHostname();
+    if (mdnsHost[0] == '\0' && wifiHost && wifiHost[0] != '\0') {
+        strlcpy(mdnsHost, wifiHost, sizeof(mdnsHost));
+    }
+
+    const unsigned screenNumber = (unsigned)screenIndex + 1;
+
+    char text[256];
+    if (mdnsHost[0] != '\0') {
+        snprintf(
+            text,
+            sizeof(text),
+            "No macros configured.\n\nOpen the config portal:\nhttp://%s\nhttp://%s.local\n\nConfigure Macro Screen %u.",
+            ipStr.c_str(),
+            mdnsHost,
+            screenNumber);
+    } else {
+        snprintf(
+            text,
+            sizeof(text),
+            "No macros configured.\n\nOpen the config portal:\nhttp://%s\n\nConfigure Macro Screen %u.",
+            ipStr.c_str(),
+            screenNumber);
+    }
+
+    lv_label_set_text(emptyStateLabel, text);
+    lv_obj_clear_flag(emptyStateLabel, LV_OBJ_FLAG_HIDDEN);
 }
 
 void MacroPadScreen::update() {
@@ -320,4 +365,3 @@ void MacroPadScreen::buttonEventCallback(lv_event_t* e) {
         return;
     }
 }
-
