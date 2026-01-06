@@ -28,6 +28,9 @@ ENTRY_STRUCT = struct.Struct("<HBBII16sI")
 MAGIC_PARTITION = 0x50AA
 MAGIC_MD5 = 0xEBEB
 
+# Partition type values (ESP-IDF)
+TYPE_APP = 0x00
+
 
 @dataclass(frozen=True)
 class PartitionEntry:
@@ -45,8 +48,11 @@ def _decode_label(raw: bytes) -> str:
 
 
 def read_partition_table(path: str) -> list[PartitionEntry]:
-    with open(path, "rb") as f:
-        data = f.read()
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as exc:
+        raise RuntimeError(f"Failed to read partition table from '{path}': {exc}") from exc
 
     entries: list[PartitionEntry] = []
     if len(data) < ENTRY_STRUCT.size:
@@ -93,8 +99,7 @@ def find_preferred_app_partition(entries: list[PartitionEntry]) -> PartitionEntr
             return entry
 
     # Fallback: pick the lowest-offset app partition.
-    # ESP-IDF uses type 0x00 for app partitions.
-    app_entries = [e for e in entries if e.type == 0x00]
+    app_entries = [e for e in entries if e.type == TYPE_APP]
     if not app_entries:
         return None
     return min(app_entries, key=lambda e: e.offset)
@@ -113,7 +118,11 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    entries = read_partition_table(args.partitions_bin)
+    try:
+        entries = read_partition_table(args.partitions_bin)
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     if not entries:
         print("Error: no partition entries found", file=sys.stderr)
         return 2

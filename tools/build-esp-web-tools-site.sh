@@ -8,6 +8,11 @@ TEMPLATE_DIR="$REPO_ROOT/tools/esp-web-tools-site"
 
 source "$REPO_ROOT/config.sh"
 
+# Standard ESP32 flash layout offsets (bytes)
+BOOTLOADER_OFFSET_DEC=0
+PARTITION_TABLE_OFFSET_DEC=32768  # 0x8000
+BOOT_APP0_OFFSET_DEC=57344        # 0xE000
+
 OUT_DIR="${1:-$REPO_ROOT/site}"
 
 # Only deploy “latest” (site output is overwritten each deploy)
@@ -208,7 +213,14 @@ for board_name in "${boards[@]}"; do
 
   # Determine the app0 offset from the built partition table.
   # This is critical for custom layouts where app0 is not at 0x10000.
-  app_offset_hex="$(python3 "$REPO_ROOT/tools/parse_esp32_partitions.py" "$partitions_bin" --label app0 --print offset-hex)"
+  app_offset_hex="$(python3 "$REPO_ROOT/tools/parse_esp32_partitions.py" "$partitions_bin" --label app0 --print offset-hex)" || {
+    echo "ERROR: Failed to parse app offset from partitions image for $board_name: $partitions_bin" >&2
+    exit 1
+  }
+  if [[ -z "$app_offset_hex" || ! "$app_offset_hex" =~ ^0x[0-9a-fA-F]+$ ]]; then
+    echo "ERROR: Invalid app offset value '$app_offset_hex' parsed from $partitions_bin for $board_name" >&2
+    exit 1
+  fi
   app_offset_dec=$((app_offset_hex))
 
   dst_dir="$OUT_DIR/firmware/$board_name"
@@ -231,9 +243,9 @@ for board_name in "${boards[@]}"; do
     {
       "chipFamily": "${chip_family}",
       "parts": [
-        { "path": "../firmware/${board_name}/bootloader.bin?v=${SHA_SHORT}", "offset": 0 },
-        { "path": "../firmware/${board_name}/partitions.bin?v=${SHA_SHORT}", "offset": 32768 },
-        { "path": "../firmware/${board_name}/boot_app0.bin?v=${SHA_SHORT}", "offset": 57344 },
+        { "path": "../firmware/${board_name}/bootloader.bin?v=${SHA_SHORT}", "offset": ${BOOTLOADER_OFFSET_DEC} },
+        { "path": "../firmware/${board_name}/partitions.bin?v=${SHA_SHORT}", "offset": ${PARTITION_TABLE_OFFSET_DEC} },
+        { "path": "../firmware/${board_name}/boot_app0.bin?v=${SHA_SHORT}", "offset": ${BOOT_APP0_OFFSET_DEC} },
         { "path": "../firmware/${board_name}/app.bin?v=${SHA_SHORT}", "offset": ${app_offset_dec} }
       ]
     }
