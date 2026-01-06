@@ -82,6 +82,11 @@ private:
     InfoScreen infoScreen;
     TestScreen testScreen;
 
+    // When called off the LVGL task we try a bounded mutex wait. If that fails,
+    // defer the splash status update and apply it from the LVGL task loop.
+    char pendingSplashStatus[96];
+    bool pendingSplashStatusPending;
+
     // Fixed macro pad screens (created lazily on first show)
     MacroPadScreen macroScreens[MACROS_SCREEN_COUNT];
 
