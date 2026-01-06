@@ -202,53 +202,34 @@ void handleGetMacros(AsyncWebServerRequest *request) {
     macros_cache_load_if_needed();
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
-    response->print("{\"success\":true,\"version\":4,\"buttons_per_screen\":");
+    // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
+    response->print("{\"success\":true,\"version\":5,\"buttons_per_screen\":");
     response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
 
     // Templates (for the web editor)
     response->print(",\"templates\":[");
     {
-        const char* id = macro_templates::kTemplateRoundRing9;
-        response->print("{\"id\":\"");
-        response->print(id);
-        response->print("\",\"name\":\"");
-        response->print(macro_templates::display_name(id));
-        response->print("\",\"selector_layout\":");
-        response->print(macro_templates::selector_layout_json(id));
-        response->print("}");
-    }
-    response->print(",");
-    {
-        const char* id = macro_templates::kTemplateStackSides5;
-        response->print("{\"id\":\"");
-        response->print(id);
-        response->print("\",\"name\":\"");
-        response->print(macro_templates::display_name(id));
-        response->print("\",\"selector_layout\":");
-        response->print(macro_templates::selector_layout_json(id));
-        response->print("}");
-    }
-    response->print(",");
-    {
-        const char* id = macro_templates::kTemplateWideSides3;
-        response->print("{\"id\":\"");
-        response->print(id);
-        response->print("\",\"name\":\"");
-        response->print(macro_templates::display_name(id));
-        response->print("\",\"selector_layout\":");
-        response->print(macro_templates::selector_layout_json(id));
-        response->print("}");
-    }
-    response->print(",");
-    {
-        const char* id = macro_templates::kTemplateSplitSides4;
-        response->print("{\"id\":\"");
-        response->print(id);
-        response->print("\",\"name\":\"");
-        response->print(macro_templates::display_name(id));
-        response->print("\",\"selector_layout\":");
-        response->print(macro_templates::selector_layout_json(id));
-        response->print("}");
+        static const char* kTemplateIds[] = {
+            macro_templates::kTemplateRoundRing9,
+            macro_templates::kTemplateStackSides5,
+            macro_templates::kTemplateWideSides3,
+            macro_templates::kTemplateSplitSides4,
+        };
+        bool first = true;
+        for (const char* id : kTemplateIds) {
+            if (!id || !*id) continue;
+            const char* layout = macro_templates::selector_layout_json(id);
+            if (!layout) continue;
+            if (!first) response->print(",");
+            first = false;
+            response->print("{\"id\":\"");
+            response->print(id);
+            response->print("\",\"name\":\"");
+            response->print(macro_templates::display_name(id));
+            response->print("\",\"selector_layout\":");
+            response->print(layout);
+            response->print("}");
+        }
     }
     response->print("]");
 
@@ -256,8 +237,13 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
     for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
         if (s > 0) response->print(",");
+        const char* tpl = macro_config.template_id[s];
+        if (!macro_templates::is_valid(tpl)) {
+            tpl = macro_templates::default_id();
+        }
+
         response->print("{\"template\":\"");
-        response->print(macro_config.template_id[s]);
+        response->print(tpl);
         response->print("\",\"buttons\":[");
 
         for (int b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {

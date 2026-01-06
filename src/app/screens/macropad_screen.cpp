@@ -669,10 +669,13 @@ void MacroPadScreen::updateEmptyState(bool anyButtonConfigured) {
 void MacroPadScreen::update() {
     const MacroConfig* cfg = getMacroConfig();
     if (cfg) {
-        const char* tpl = cfg->template_id[screenIndex];
-        if (tpl && tpl[0] != '\0' && strncmp(tpl, lastTemplateId, sizeof(lastTemplateId)) != 0) {
+        const char* tpl = (cfg->template_id[screenIndex][0] != '\0') ? cfg->template_id[screenIndex] : macro_templates::default_id();
+        if (!macro_templates::is_valid(tpl)) {
+            tpl = macro_templates::default_id();
+        }
+
+        if (strcmp(tpl, lastTemplateId) != 0) {
             // Template changed: re-layout immediately.
-            strlcpy(lastTemplateId, tpl, sizeof(lastTemplateId));
             layoutButtons();
             refreshButtons(true);
             return;

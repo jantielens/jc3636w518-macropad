@@ -41,7 +41,7 @@ private:
 
     uint32_t lastUpdateMs;
 
-    char lastTemplateId[16];
+    char lastTemplateId[MACROS_TEMPLATE_ID_MAX_LEN];
 
     void layoutButtons();
     void layoutButtonsRound9();

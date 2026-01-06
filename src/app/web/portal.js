@@ -52,6 +52,9 @@ const MACROS_LABEL_MAX = 15;
 const MACROS_SCRIPT_MAX = 255;
 const MACROS_ICON_ID_MAX = 31;
 
+// Keep in sync with src/app/macro_templates.h (macro_templates::default_id()).
+const MACROS_DEFAULT_TEMPLATE_ID = 'round_ring_9';
+
 let macrosPayloadCache = null; // { screens: [ { buttons: [ {label, action, script, icon_id}, ... ] }, ... ] }
 let macrosTemplatesCache = []; // [{id,name,selector_layout}, ...]
 let macrosSelectedScreen = 0; // 0-based
@@ -96,7 +99,7 @@ function macrosCreateEmptyPayload() {
         for (let b = 0; b < macrosButtonsPerScreen; b++) {
             buttons.push(macrosCreateEmptyButton());
         }
-        payload.screens.push({ template: 'round_ring_9', buttons });
+        payload.screens.push({ template: MACROS_DEFAULT_TEMPLATE_ID, buttons });
     }
     return payload;
 }
@@ -138,7 +141,7 @@ function macrosRenderTemplateSelect() {
     // Ensure we have something to show.
     const templates = Array.isArray(macrosTemplatesCache) && macrosTemplatesCache.length > 0
         ? macrosTemplatesCache
-        : [{ id: 'round_ring_9', name: 'Round Ring (9)' }];
+        : [{ id: MACROS_DEFAULT_TEMPLATE_ID, name: 'Round Ring (9)' }];
 
     // Rebuild options if needed.
     if (select.options.length !== templates.length) {
@@ -152,7 +155,7 @@ function macrosRenderTemplateSelect() {
         }
     }
 
-    const current = macrosGetSelectedTemplateId() || 'round_ring_9';
+    const current = macrosGetSelectedTemplateId() || MACROS_DEFAULT_TEMPLATE_ID;
     select.value = current;
 }
 
@@ -367,7 +370,7 @@ function macrosBindEditorEvents() {
             if (!macrosPayloadCache) return;
             const screen = macrosPayloadCache.screens[macrosSelectedScreen];
             if (!screen) return;
-            screen.template = templateSelect.value || 'round_ring_9';
+            screen.template = templateSelect.value || MACROS_DEFAULT_TEMPLATE_ID;
             macrosSelectedButton = 0;
             macrosSetDirty(true);
             macrosRenderAll();
