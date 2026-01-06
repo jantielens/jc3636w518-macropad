@@ -53,7 +53,7 @@ jobs:
             exit 1
           fi
 
-      - name: Download merged release assets
+      - name: Download release firmware assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -66,7 +66,7 @@ jobs:
           gh release download "$tag_name" \
             --repo "${{ github.repository }}" \
             --dir release-assets \
-            --pattern "*-merged.bin"
+            --pattern "*.bin"
 
           echo "Downloaded assets:"
           ls -lh release-assets
@@ -97,16 +97,38 @@ jobs:
               continue
             fi
 
-            expected_name="$PROJECT_NAME-$board_name-v$VERSION-merged.bin"
-            merged_path="release-assets/$expected_name"
+            expected_app="$PROJECT_NAME-$board_name-v$VERSION.bin"
+            expected_bootloader="$PROJECT_NAME-$board_name-v$VERSION-bootloader.bin"
+            expected_partitions="$PROJECT_NAME-$board_name-v$VERSION-partitions.bin"
+            expected_boot_app0="$PROJECT_NAME-$board_name-v$VERSION-boot_app0.bin"
 
-            if [[ ! -f "$merged_path" ]]; then
-              echo "Error: merged firmware not found for $board_name (expected $expected_name)"
+            app_path="release-assets/$expected_app"
+            bootloader_path="release-assets/$expected_bootloader"
+            partitions_path="release-assets/$expected_partitions"
+            boot_app0_path="release-assets/$expected_boot_app0"
+
+            if [[ ! -f "$app_path" ]]; then
+              echo "Error: app firmware not found for $board_name (expected $expected_app)" >&2
+              exit 1
+            fi
+            if [[ ! -f "$bootloader_path" ]]; then
+              echo "Error: bootloader not found for $board_name (expected $expected_bootloader)" >&2
+              exit 1
+            fi
+            if [[ ! -f "$partitions_path" ]]; then
+              echo "Error: partition table not found for $board_name (expected $expected_partitions)" >&2
+              exit 1
+            fi
+            if [[ ! -f "$boot_app0_path" ]]; then
+              echo "Error: boot_app0 not found for $board_name (expected $expected_boot_app0)" >&2
               exit 1
             fi
 
             mkdir -p "build/$board_name"
-            cp "$merged_path" "build/$board_name/app.ino.merged.bin"
+            cp "$app_path" "build/$board_name/app.ino.bin"
+            cp "$bootloader_path" "build/$board_name/app.ino.bootloader.bin"
+            cp "$partitions_path" "build/$board_name/app.ino.partitions.bin"
+            cp "$boot_app0_path" "build/$board_name/app.ino.boot_app0.bin"
           done
 
       - name: Build installer site (latest stable)

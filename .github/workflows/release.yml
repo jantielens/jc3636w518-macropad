@@ -121,14 +121,41 @@ jobs:
         BOARD_DIR="build/${{ matrix.board.name }}"
 
         # Explicitly package the correct firmware images.
-        # - app.ino.bin: app-only image
-        # - app.ino.merged.bin: merged image (ESP Web Tools-friendly, flash at offset 0)
+        # - app.ino.bin: app-only image (flash at the app0 offset defined by the partition table)
+        # - app.ino.bootloader.bin: bootloader (offset 0x0)
+        # - app.ino.partitions.bin: partition table (offset 0x8000)
+        # - boot_app0.bin: OTA boot helper (offset 0xE000)
+        # - app.ino.merged.bin: convenience merged image (may not be suitable for custom partition layouts)
 
         APP_BIN="$BOARD_DIR/app.ino.bin"
+        BOOTLOADER_BIN="$BOARD_DIR/app.ino.bootloader.bin"
+        PARTITIONS_BIN="$BOARD_DIR/app.ino.partitions.bin"
         MERGED_BIN="$BOARD_DIR/app.ino.merged.bin"
+
+        # boot_app0.bin is not produced by Arduino builds, but is part of the
+        # standard ESP32 flashing layout and is used by the web installer.
+        BOOT_APP0_SRC=$(find ~/.arduino15/packages/esp32/hardware/esp32 -type f -name boot_app0.bin -path '*/tools/partitions/*' | head -n 1)
+        if [ -z "$BOOT_APP0_SRC" ] || [ ! -f "$BOOT_APP0_SRC" ]; then
+          echo "Error: boot_app0.bin not found in Arduino ESP32 core installation" >&2
+          exit 1
+        fi
+        cp "$BOOT_APP0_SRC" "$BOARD_DIR/app.ino.boot_app0.bin"
+        BOOT_APP0_BIN="$BOARD_DIR/app.ino.boot_app0.bin"
 
         if [ ! -f "$APP_BIN" ]; then
           echo "Error: app-only firmware not found: $APP_BIN"
+          exit 1
+        fi
+        if [ ! -f "$BOOTLOADER_BIN" ]; then
+          echo "Error: bootloader firmware not found: $BOOTLOADER_BIN"
+          exit 1
+        fi
+        if [ ! -f "$PARTITIONS_BIN" ]; then
+          echo "Error: partitions firmware not found: $PARTITIONS_BIN"
+          exit 1
+        fi
+        if [ ! -f "$BOOT_APP0_BIN" ]; then
+          echo "Error: boot_app0 firmware not found: $BOOT_APP0_BIN"
           exit 1
         fi
         if [ ! -f "$MERGED_BIN" ]; then
@@ -138,6 +165,15 @@ jobs:
 
         cp "$APP_BIN" "$BOARD_DIR/$PROJECT_NAME-${{ matrix.board.name }}-v$VERSION.bin"
         echo "Created: $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION.bin"
+
+        cp "$BOOTLOADER_BIN" "$BOARD_DIR/$PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-bootloader.bin"
+        echo "Created: $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-bootloader.bin"
+
+        cp "$PARTITIONS_BIN" "$BOARD_DIR/$PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-partitions.bin"
+        echo "Created: $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-partitions.bin"
+
+        cp "$BOOT_APP0_BIN" "$BOARD_DIR/$PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-boot_app0.bin"
+        echo "Created: $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-boot_app0.bin"
 
         cp "$MERGED_BIN" "$BOARD_DIR/$PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-merged.bin"
         echo "Created: $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-merged.bin"
@@ -156,6 +192,9 @@ jobs:
         VERSION="${{ needs.prepare-matrix.outputs.version }}"
         PROJECT_NAME="${{ needs.prepare-matrix.outputs.project_name }}"
         BOARD_DIR="build/${{ matrix.board.name }}"
+
+        APP_OFFSET_HEX=$(python3 tools/parse_esp32_partitions.py "$BOARD_DIR/app.ino.partitions.bin" --label app0 --print offset-hex)
+        APP_OFFSET_DEC=$((APP_OFFSET_HEX))
         
         cat > "$BOARD_DIR/build-info-${{ matrix.board.name }}.txt" <<EOF
         ESP32 Firmware Build Information
@@ -173,11 +212,18 @@ jobs:
         
         Firmware Files:
         - $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION.bin (app-only image)
-        - $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-merged.bin (merged image; ESP Web Tools)
+        - $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-bootloader.bin (bootloader; flash @ 0x0)
+        - $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-partitions.bin (partition table; flash @ 0x8000)
+        - $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-boot_app0.bin (OTA boot helper; flash @ 0xE000)
+        - $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-merged.bin (merged image; convenience only)
         - $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION.elf (debug symbols)
         
         Flash Command:
-        esptool.py --chip auto --port /dev/ttyUSB0 --baud 921600 write_flash 0x0 $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION.bin
+        esptool.py --chip auto --port /dev/ttyUSB0 --baud 921600 write_flash \
+          0x0 $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-bootloader.bin \
+          0x8000 $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-partitions.bin \
+          0xE000 $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION-boot_app0.bin \
+          $APP_OFFSET_HEX $PROJECT_NAME-${{ matrix.board.name }}-v$VERSION.bin
         EOF
         
         cat "$BOARD_DIR/build-info-${{ matrix.board.name }}.txt"
@@ -188,16 +234,22 @@ jobs:
         name: ${{ needs.prepare-matrix.outputs.project_name }}-${{ matrix.board.name }}-v${{ needs.prepare-matrix.outputs.version }}
         path: |
           build/${{ matrix.board.name }}/${{ needs.prepare-matrix.outputs.project_name }}-*-v${{ needs.prepare-matrix.outputs.version }}.bin
+          build/${{ matrix.board.name }}/${{ needs.prepare-matrix.outputs.project_name }}-*-v${{ needs.prepare-matrix.outputs.version }}-bootloader.bin
+          build/${{ matrix.board.name }}/${{ needs.prepare-matrix.outputs.project_name }}-*-v${{ needs.prepare-matrix.outputs.version }}-partitions.bin
+          build/${{ matrix.board.name }}/${{ needs.prepare-matrix.outputs.project_name }}-*-v${{ needs.prepare-matrix.outputs.version }}-boot_app0.bin
           build/${{ matrix.board.name }}/${{ needs.prepare-matrix.outputs.project_name }}-*-v${{ needs.prepare-matrix.outputs.version }}-merged.bin
           build/${{ matrix.board.name }}/${{ needs.prepare-matrix.outputs.project_name }}-*-v${{ needs.prepare-matrix.outputs.version }}.elf
           build/${{ matrix.board.name }}/build-info-*.txt
         retention-days: 90
     
-    - name: Prepare release files (app + merged)
+    - name: Prepare release files (app + flash parts)
       run: |
         PROJECT_NAME="${{ needs.prepare-matrix.outputs.project_name }}"
         mkdir -p release-files-${{ matrix.board.name }}
         cp build/${{ matrix.board.name }}/$PROJECT_NAME-*-v${{ needs.prepare-matrix.outputs.version }}.bin release-files-${{ matrix.board.name }}/
+        cp build/${{ matrix.board.name }}/$PROJECT_NAME-*-v${{ needs.prepare-matrix.outputs.version }}-bootloader.bin release-files-${{ matrix.board.name }}/
+        cp build/${{ matrix.board.name }}/$PROJECT_NAME-*-v${{ needs.prepare-matrix.outputs.version }}-partitions.bin release-files-${{ matrix.board.name }}/
+        cp build/${{ matrix.board.name }}/$PROJECT_NAME-*-v${{ needs.prepare-matrix.outputs.version }}-boot_app0.bin release-files-${{ matrix.board.name }}/
         cp build/${{ matrix.board.name }}/$PROJECT_NAME-*-v${{ needs.prepare-matrix.outputs.version }}-merged.bin release-files-${{ matrix.board.name }}/
     
     - name: Upload release files

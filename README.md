@@ -534,7 +534,11 @@ After the run finishes, the installer will be available at:
 ### Notes
 
 - This works without CORS issues because the page, manifest, and firmware `.bin` files are all served from the same GitHub Pages origin.
-- The installer uses each board’s `app.ino.merged.bin` output and flashes it at offset `0`.
+- The installer flashes **bootloader + partition table + boot_app0 + app** as separate parts.
+  - Bootloader at offset `0x0`
+  - Partition table at offset `0x8000`
+  - `boot_app0` at offset `0xE000`
+  - App at the `app0` offset defined by the built partition table (e.g. `0x20000`)
 - Boards with names containing `beta` or `experimental` are excluded from the hosted installer list.
 
 Separately from the browser installer, the device web portal also supports a **device-side online update** (Firmware page → “Online Update (GitHub)”). That flow downloads the board-specific **app-only** release asset (`$PROJECT_NAME-<board>-vX.Y.Z.bin`) directly from GitHub Releases and installs it on the device.
