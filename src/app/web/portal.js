@@ -205,7 +205,26 @@ function macrosRenderScreenSelect() {
 function macrosRenderButtonGrid() {
     const grid = document.getElementById('macro_button_grid');
     if (!grid) return;
+
+    // UX: while /api/macros is loading, avoid flashing the default 4×4 selector.
+    // Show a minimal placeholder instead.
     if (!macrosPayloadCache) {
+        if (macrosLoading) {
+            const cols = Math.max(1, parseInt((MACROS_SELECTOR_LAYOUT_DEFAULT || {}).columns, 10) || 4);
+            grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+            grid.innerHTML = '';
+
+            const loading = document.createElement('div');
+            loading.className = 'macro-button macro-button--spacer';
+            loading.style.gridColumn = '1 / -1';
+            loading.style.padding = '12px';
+            loading.style.textAlign = 'center';
+            loading.style.opacity = '0.75';
+            loading.textContent = 'Loading macros…';
+            grid.appendChild(loading);
+            return;
+        }
+
         grid.innerHTML = '';
         return;
     }
@@ -544,14 +563,14 @@ function initMacrosEditor() {
 
     macrosBindEditorEvents();
 
-    // Start with an empty payload so the UI is responsive immediately.
-    // This uses the default screen count until /api/macros tells us otherwise.
+    // While /api/macros is loading, render a minimal placeholder (no default grid flash).
     macrosScreenCount = MACROS_SCREEN_COUNT_DEFAULT;
     macrosButtonsPerScreen = MACROS_BUTTONS_PER_SCREEN_DEFAULT;
-    macrosPayloadCache = macrosCreateEmptyPayload();
-    macrosRenderAll();
+    macrosPayloadCache = null;
 
+    // Kick off load first so macrosLoading becomes true synchronously.
     loadMacros();
+    macrosRenderAll();
 }
 
 /**
