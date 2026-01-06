@@ -98,13 +98,25 @@ static uint8_t* g_macros_body = nullptr;
 static size_t g_macros_body_total = 0;
 static bool g_macros_body_in_progress = false;
 
+// MVP: macros editor posts the full 8×9 config. Keep the parsing document bounded.
+// If MACROS_* dimensions or max string sizes are increased, adjust this accordingly.
+static constexpr size_t kMacrosJsonDocCapacity = 32768;
+
+// Protect macros upload globals from theoretical cross-task interleaving.
+static portMUX_TYPE g_macros_body_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static void macros_body_reset() {
-    if (g_macros_body) {
-        free(g_macros_body);
-        g_macros_body = nullptr;
-    }
+    uint8_t* toFree = nullptr;
+    portENTER_CRITICAL(&g_macros_body_mux);
+    toFree = g_macros_body;
+    g_macros_body = nullptr;
     g_macros_body_total = 0;
     g_macros_body_in_progress = false;
+    portEXIT_CRITICAL(&g_macros_body_mux);
+
+    if (toFree) {
+        free(toFree);
+    }
 }
 
 // The runtime macro screen UI reads from this instance (defined in app.ino).
@@ -226,16 +238,27 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
 
     // Chunk-safe body accumulation (AsyncWebServer may call us multiple times).
     if (index == 0) {
-        if (g_macros_body_in_progress) {
+        bool alreadyInProgress = false;
+        uint8_t* staleBody = nullptr;
+        portENTER_CRITICAL(&g_macros_body_mux);
+        alreadyInProgress = g_macros_body_in_progress;
+        if (!alreadyInProgress) {
+            // Clear any stale buffer from a previous attempt.
+            staleBody = g_macros_body;
+            g_macros_body = nullptr;
+            g_macros_body_total = total;
+            g_macros_body_in_progress = true;
+        }
+        portEXIT_CRITICAL(&g_macros_body_mux);
+
+        if (staleBody) {
+            free(staleBody);
+        }
+
+        if (alreadyInProgress) {
             request->send(409, "application/json", "{\"success\":false,\"message\":\"Another macros update is in progress\"}");
             return;
         }
-
-        // Clean up any stale buffer from a previous attempt.
-        macros_body_reset();
-
-        g_macros_body_in_progress = true;
-        g_macros_body_total = total;
 
 #if SOC_SPIRAM_SUPPORTED
         if (psramFound()) {
@@ -272,7 +295,7 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     }
 
     // Parse JSON body
-    DynamicJsonDocument doc(32768);
+    DynamicJsonDocument doc(kMacrosJsonDocCapacity);
     DeserializationError error = deserializeJson(doc, g_macros_body, total);
 
     macros_body_reset();
