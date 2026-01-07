@@ -835,13 +835,15 @@ void MacroPadScreen::updateButtonLayout(uint8_t index, bool hasIcon, bool hasLab
     if (canTransform) {
         uint16_t zoom = (uint16_t)clampInt((int)lroundf(256.0f * ((float)iconBox / 64.0f)), 64, 256);
         if (wants2x) zoom = 512;
+
+        // LVGL's image widget will *tile* (repeat) the image when the object is larger than
+        // the image and the size mode is VIRTUAL. We want a single icon, so force REAL sizing
+        // and let the object size follow the (zoomed) image size.
+        lv_img_set_size_mode(icon, LV_IMG_SIZE_MODE_REAL);
+        lv_img_set_offset_x(icon, 0);
+        lv_img_set_offset_y(icon, 0);
         lv_img_set_zoom(icon, zoom);
-        // Ensure the scaled image has enough object area to render without clipping.
-        if (wants2x) {
-            lv_obj_set_size(icon, 128, 128);
-        } else {
-            lv_obj_set_size(icon, iconBox, iconBox);
-        }
+        lv_obj_set_size(icon, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     } else {
         // Alpha-only masks can't be zoomed by lv_img_set_zoom.
         // Instead, when we want a 2x icon, generate a cached 2x alpha mask in RAM.

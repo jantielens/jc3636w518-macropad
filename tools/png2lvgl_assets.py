@@ -37,6 +37,18 @@ except Exception as exc:  # pragma: no cover
 _VALID_C_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+def _header_guard_from_path(path_h: str) -> str:
+    base = os.path.basename(path_h)
+    stem = os.path.splitext(base)[0]
+    # Convert to an all-caps macro-safe token.
+    token = re.sub(r"[^A-Za-z0-9]", "_", stem).upper()
+    if not token:
+        token = "ASSETS"
+    if token[0].isdigit():
+        token = "H_" + token
+    return f"{token}_H"
+
+
 class LvglColorFormat(str, Enum):
     TRUE_COLOR_ALPHA = "true_color_alpha"
     ALPHA_8BIT = "alpha_8bit"
@@ -156,7 +168,7 @@ def _validate_symbol_name(symbol: str, source_file: str) -> None:
 
 
 def _write_header(path_h: str, images: List[LvglImage]) -> None:
-    guard = "PNG_ASSETS_H"
+    guard = _header_guard_from_path(path_h)
     with open(path_h, "w", encoding="utf-8") as f:
         f.write("/*\n")
         f.write(" * Auto-generated PNG asset declarations\n")

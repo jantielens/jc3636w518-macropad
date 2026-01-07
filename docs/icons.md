@@ -26,6 +26,41 @@ This project supports a compiled icon library for macro buttons, designed to wor
 
 All icon source PNGs are standardized as **64×64**.
 
+## Adding Color Icons from Twemoji
+
+This repo can include a curated set of Twemoji-based color icons in `assets/icons_color/`.
+
+Why this fits the current pipeline:
+- Twemoji provides per-emoji SVG assets.
+- The project already converts `assets/icons_color/*.png` → LVGL `LV_IMG_CF_TRUE_COLOR_ALPHA` at build time.
+
+### Fetch Tool
+
+- Script: `tools/fetch_twemoji.py`
+- Mapping file: `tools/twemoji_icons.txt`
+
+Run:
+
+```bash
+python3 tools/fetch_twemoji.py --map-file tools/twemoji_icons.txt \
+  --out-dir assets/icons_color --size 64
+```
+
+The mapping file format is:
+
+```text
+<icon_id> <emoji>
+```
+
+Guidelines:
+- Use unique `icon_id` values (the generated registry does not allow duplicate IDs across mono+color).
+- Keep `icon_id` C-identifier safe (letters/digits/underscore; not starting with a digit).
+- Consider a prefix like `emoji_` to avoid collisions with the mono Material Symbols IDs.
+
+### License / Attribution
+
+Twemoji graphics are licensed under **CC BY 4.0** (attribution required). If you distribute firmware that embeds these icons, include attribution in project documentation.
+
 ## Build Pipeline
 
 The build script generates LVGL C arrays and a registry when the target board enables icons.
