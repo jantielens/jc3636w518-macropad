@@ -37,6 +37,11 @@ private:
     lv_obj_t* buttons[MACROS_BUTTONS_PER_SCREEN];
     lv_obj_t* labels[MACROS_BUTTONS_PER_SCREEN];
     lv_obj_t* icons[MACROS_BUTTONS_PER_SCREEN];
+
+    // Pie template helpers (round_pie_8): we use a full-screen hit layer for
+    // polar hit-testing and draw ring segments separately.
+    lv_obj_t* pieHitLayer;
+    lv_obj_t* pieSegments[8];
     lv_obj_t* emptyStateLabel;
     ButtonCtx buttonCtx[MACROS_BUTTONS_PER_SCREEN];
 
@@ -46,6 +51,7 @@ private:
 
     void layoutButtons();
     void layoutButtonsRound9();
+    void layoutButtonsPie8();
     void layoutButtonsFiveStack();
     void layoutButtonsWideCenter();
     void layoutButtonsFourSplit();
@@ -58,6 +64,11 @@ private:
 
     const MacroConfig* getMacroConfig() const;
     BleKeyboardManager* getBleKeyboard() const;
+
+    void handleButtonClick(uint8_t buttonIndex);
+    int pieSlotFromPoint(int x, int y) const;
+
+    static void pieEventCallback(lv_event_t* e);
 
     static void buttonEventCallback(lv_event_t* e);
 };

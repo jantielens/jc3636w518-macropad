@@ -6,7 +6,11 @@ namespace macro_templates {
 
 bool is_valid(const char* id) {
     if (!id || !*id) return false;
-    return strcmp(id, kTemplateRoundRing9) == 0 || strcmp(id, kTemplateStackSides5) == 0 || strcmp(id, kTemplateWideSides3) == 0 || strcmp(id, kTemplateSplitSides4) == 0;
+    return strcmp(id, kTemplateRoundRing9) == 0
+        || strcmp(id, kTemplateRoundPie8) == 0
+        || strcmp(id, kTemplateStackSides5) == 0
+        || strcmp(id, kTemplateWideSides3) == 0
+        || strcmp(id, kTemplateSplitSides4) == 0;
 }
 
 const char* default_id() {
@@ -16,6 +20,7 @@ const char* default_id() {
 const char* display_name(const char* id) {
     if (!id || !*id) return "(unknown)";
     if (strcmp(id, kTemplateRoundRing9) == 0) return "Round Ring (9)";
+    if (strcmp(id, kTemplateRoundPie8) == 0) return "Round Pie (8 + Center)";
     if (strcmp(id, kTemplateStackSides5) == 0) return "Stack + Sides (5)";
     if (strcmp(id, kTemplateSplitSides4) == 0) return "Split Center + Sides (4)";
     if (strcmp(id, kTemplateWideSides3) == 0) return "Wide Center + Sides (3)";
@@ -55,6 +60,7 @@ const char* selector_layout_json(const char* id) {
         "{\"columns\":3,\"cells\":[null,0,null,3,null,4,null,2,null]}";
 
     if (strcmp(id, kTemplateRoundRing9) == 0) return kRound9;
+    if (strcmp(id, kTemplateRoundPie8) == 0) return kRound9;
     if (strcmp(id, kTemplateStackSides5) == 0) return kFiveStack;
     if (strcmp(id, kTemplateWideSides3) == 0) return kWideCenter;
     if (strcmp(id, kTemplateSplitSides4) == 0) return kFourSplit;

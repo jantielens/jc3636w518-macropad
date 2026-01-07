@@ -234,6 +234,7 @@ void handleGetMacros(AsyncWebServerRequest *request) {
     {
         static const char* kTemplateIds[] = {
             macro_templates::kTemplateRoundRing9,
+            macro_templates::kTemplateRoundPie8,
             macro_templates::kTemplateStackSides5,
             macro_templates::kTemplateWideSides3,
             macro_templates::kTemplateSplitSides4,

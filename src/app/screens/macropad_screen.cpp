@@ -30,6 +30,12 @@ namespace {
 
 constexpr uint32_t kUiRefreshIntervalMs = 500;
 
+static float clampf(float v, float lo, float hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
 static void setButtonVisible(lv_obj_t* btn, bool visible) {
     if (!btn) return;
     if (visible) {
@@ -222,6 +228,11 @@ void MacroPadScreen::configure(DisplayManager* manager, uint8_t idx) {
         buttonCtx[i] = {this, (uint8_t)i};
     }
 
+    pieHitLayer = nullptr;
+    for (int i = 0; i < 8; i++) {
+        pieSegments[i] = nullptr;
+    }
+
     emptyStateLabel = nullptr;
 
     lastUpdateMs = 0;
@@ -246,6 +257,10 @@ void MacroPadScreen::create() {
 
     screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
+    // The screen root is just a container for our custom hit targets.
+    // Disable scrolling to avoid LVGL showing scrollbars.
+    lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(screen, LV_SCROLLBAR_MODE_OFF);
 
     // Create clickable objects with centered labels.
     // (Avoid lv_btn_create so this works even when LV_USE_BTN=0.)
@@ -298,6 +313,46 @@ void MacroPadScreen::create() {
         icons[i] = icon;
     }
 
+    // Pie template: full-screen hit layer (polar hit testing), and 8 ring segments.
+    // These are hidden by default and only enabled for the round_pie_8 template.
+    pieHitLayer = lv_obj_create(screen);
+    lv_obj_clear_flag(pieHitLayer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(pieHitLayer, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(pieHitLayer, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(pieHitLayer, 0, 0);
+    lv_obj_set_style_outline_width(pieHitLayer, 0, 0);
+    lv_obj_set_style_pad_all(pieHitLayer, 0, 0);
+    lv_obj_add_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(pieHitLayer, pieEventCallback, LV_EVENT_CLICKED, this);
+
+    for (int i = 0; i < 8; i++) {
+        lv_obj_t* seg = lv_arc_create(screen);
+        // Arc widget defaults are interactive; make it purely visual.
+        lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(seg, LV_OBJ_FLAG_CLICKABLE);
+        // Hide until pie template is active.
+        lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
+
+        // Make the arc look like a ring segment (no knob/indicator).
+        lv_obj_set_style_bg_opa(seg, LV_OPA_TRANSP, LV_PART_MAIN);
+        lv_obj_set_style_border_width(seg, 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(seg, 0, LV_PART_MAIN);
+
+        // Hide knob.
+        lv_obj_set_style_bg_opa(seg, LV_OPA_TRANSP, LV_PART_KNOB);
+        lv_obj_set_style_border_width(seg, 0, LV_PART_KNOB);
+
+        // Default segment color; per-button colors applied in refreshButtons().
+        lv_obj_set_style_arc_color(seg, lv_color_make(30, 30, 30), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_opa(seg, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_rounded(seg, false, LV_PART_INDICATOR);
+
+        // Disable the background arc.
+        lv_obj_set_style_arc_opa(seg, LV_OPA_TRANSP, LV_PART_MAIN);
+
+        pieSegments[i] = seg;
+    }
+
     // Empty-state helper (shown only on Macro Screen 1 when no macros are configured).
     emptyStateLabel = lv_label_create(screen);
     lv_obj_set_style_text_align(emptyStateLabel, LV_TEXT_ALIGN_CENTER, 0);
@@ -324,6 +379,11 @@ void MacroPadScreen::destroy() {
         buttons[i] = nullptr;
         labels[i] = nullptr;
         icons[i] = nullptr;
+    }
+
+    pieHitLayer = nullptr;
+    for (int i = 0; i < 8; i++) {
+        pieSegments[i] = nullptr;
     }
 
     emptyStateLabel = nullptr;
@@ -362,6 +422,8 @@ void MacroPadScreen::layoutButtons() {
 
     if (strcmp(tpl, macro_templates::kTemplateStackSides5) == 0) {
         layoutButtonsFiveStack();
+    } else if (strcmp(tpl, macro_templates::kTemplateRoundPie8) == 0) {
+        layoutButtonsPie8();
     } else if (strcmp(tpl, macro_templates::kTemplateWideSides3) == 0) {
         layoutButtonsWideCenter();
     } else if (strcmp(tpl, macro_templates::kTemplateSplitSides4) == 0) {
@@ -390,8 +452,120 @@ bool MacroPadScreen::isSlotUsedByTemplate(uint8_t slot) const {
         return slot == 0 || slot == 2 || slot == 3 || slot == 4;
     }
 
+    if (strcmp(tpl, macro_templates::kTemplateRoundPie8) == 0) {
+        return slot < 9;
+    }
+
     // round9
     return slot < 9;
+}
+
+int MacroPadScreen::pieSlotFromPoint(int x, int y) const {
+    if (!displayMgr) return -1;
+    const int w = displayMgr->getActiveWidth();
+    const int h = displayMgr->getActiveHeight();
+    const int cx = w / 2;
+    const int cy = h / 2;
+    const int dx = x - cx;
+    const int dy = y - cy;
+
+    const int minDim = (w < h) ? w : h;
+    const float half = (float)minDim * 0.5f;
+
+    // Keep the hit-testing geometry consistent with the visual layout in layoutButtonsPie8().
+    const float arcWidth = clampf((float)minDim * 0.22f, 44.0f, half * 0.60f);
+    const float baseSeparatorPx = clampf((float)minDim * 0.015f, 6.0f, 12.0f);
+    const float separatorPx = baseSeparatorPx + 3.0f; // requested: +3px between wedges
+
+    // Tunable radii: center hit radius and ring region.
+    const float ringOuter = half;
+    const float ringInnerEdge = clampf(ringOuter - arcWidth, 0.0f, ringOuter);
+    const float centerR = clampf(ringInnerEdge - separatorPx, 0.0f, ringOuter);
+    const float ringInner = ringInnerEdge;
+
+    const float r2 = (float)dx * (float)dx + (float)dy * (float)dy;
+    const float centerR2 = centerR * centerR;
+    const float ringInner2 = ringInner * ringInner;
+    const float ringOuter2 = ringOuter * ringOuter;
+
+    if (r2 <= centerR2) return 8;
+    if (r2 < ringInner2 || r2 > ringOuter2) return -1;
+
+    // Compute an angle where 0° is at the top and increases clockwise.
+    // (x,y) screen coords => +y down.
+    float ang = atan2f((float)dx, (float)-dy) * 180.0f / (float)M_PI;
+    if (ang < 0) ang += 360.0f;
+
+    // Slot 0 is centered at 0° (top). Offset by half a slice so the boundaries
+    // land between slots.
+    const float slice = 45.0f;
+    int slot = (int)floorf((ang + (slice * 0.5f)) / slice);
+    slot %= 8;
+    if (slot < 0) slot += 8;
+
+    // Avoid clicks on the separator gaps between wedges.
+    const float rStrokeMid = ringOuter - (arcWidth * 0.5f);
+    const float gapDeg = (rStrokeMid > 1.0f)
+        ? (separatorPx / rStrokeMid) * (180.0f / (float)M_PI)
+        : 0.0f;
+    const float sweepDeg = slice - gapDeg;
+    const float slotCenter = (float)slot * slice;
+    float delta = ang - slotCenter;
+    while (delta > 180.0f) delta -= 360.0f;
+    while (delta <= -180.0f) delta += 360.0f;
+    if (fabsf(delta) > (sweepDeg * 0.5f)) return -1;
+
+    return slot;
+}
+
+void MacroPadScreen::pieEventCallback(lv_event_t* e) {
+    MacroPadScreen* self = (MacroPadScreen*)lv_event_get_user_data(e);
+    if (!self) return;
+
+    lv_indev_t* indev = lv_indev_get_act();
+    if (!indev) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    const int slot = self->pieSlotFromPoint(p.x, p.y);
+    if (slot < 0) return;
+    self->handleButtonClick((uint8_t)slot);
+}
+
+void MacroPadScreen::handleButtonClick(uint8_t b) {
+    #if HAS_DISPLAY
+    screen_saver_manager_notify_activity(true);
+    #endif
+
+    const MacroConfig* cfg = getMacroConfig();
+    if (!cfg) return;
+
+    const MacroButtonConfig* btnCfg = &cfg->buttons[screenIndex][b];
+    if (!btnCfg) return;
+
+    if (btnCfg->action == MacroButtonAction::None) return;
+
+    if (btnCfg->action == MacroButtonAction::NavNextScreen || btnCfg->action == MacroButtonAction::NavPrevScreen) {
+        const uint8_t next = (btnCfg->action == MacroButtonAction::NavNextScreen)
+            ? (uint8_t)((screenIndex + 1) % MACROS_SCREEN_COUNT)
+            : (uint8_t)((screenIndex + MACROS_SCREEN_COUNT - 1) % MACROS_SCREEN_COUNT);
+
+        char id[16];
+        snprintf(id, sizeof(id), "macro%u", (unsigned)(next + 1));
+        displayMgr->showScreen(id);
+        return;
+    }
+
+    if (btnCfg->action == MacroButtonAction::SendKeys) {
+        if (btnCfg->script[0] == '\0') {
+            Logger.logMessage("Macro", "Empty script; skipping");
+            return;
+        }
+
+        BleKeyboardManager* kb = getBleKeyboard();
+        ducky_execute(btnCfg->script, kb);
+        return;
+    }
 }
 
 void MacroPadScreen::layoutButtonsWideCenter() {
@@ -757,6 +931,129 @@ void MacroPadScreen::layoutButtonsRound9() {
     }
 }
 
+void MacroPadScreen::layoutButtonsPie8() {
+    if (!screen || !displayMgr) return;
+
+    const int w = displayMgr->getActiveWidth();
+    const int h = displayMgr->getActiveHeight();
+    const int cx = w / 2;
+    const int cy = h / 2;
+    const int minDim = (w < h) ? w : h;
+
+    // Ring geometry for the segment visuals.
+    const int ringSize = minDim;
+    const int ringX = cx - (ringSize / 2);
+    const int ringY = cy - (ringSize / 2);
+
+    const float half = (float)minDim * 0.5f;
+
+    // Visual separation between wedges. We express it in pixels and convert to degrees.
+    // Requested change: increase separator by 3px.
+    const float baseSeparatorPx = clampf((float)minDim * 0.015f, 6.0f, 12.0f);
+    const float separatorPx = baseSeparatorPx + 3.0f;
+
+    const int arcWidth = (int)clampf((float)minDim * 0.22f, 44.0f, half * 0.60f);
+    const float ringOuter = half;
+    const float ringInnerEdge = clampf(ringOuter - (float)arcWidth, 0.0f, ringOuter);
+    const float rStrokeMid = ringOuter - ((float)arcWidth * 0.5f);
+    const float gapDeg = (rStrokeMid > 1.0f)
+        ? (separatorPx / rStrokeMid) * (180.0f / (float)M_PI)
+        : 0.0f;
+    const float sweepDeg = 45.0f - gapDeg;
+
+    // Place the hit layer above everything.
+    if (pieHitLayer) {
+        lv_obj_set_pos(pieHitLayer, 0, 0);
+        lv_obj_set_size(pieHitLayer, w, h);
+        lv_obj_clear_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(pieHitLayer);
+    }
+
+    // Configure the 8 ring segments; actual color + visibility is applied in refreshButtons().
+    for (int i = 0; i < 8; i++) {
+        lv_obj_t* seg = pieSegments[i];
+        if (!seg) continue;
+
+        lv_obj_set_pos(seg, ringX, ringY);
+        lv_obj_set_size(seg, ringSize, ringSize);
+
+        lv_obj_set_style_arc_width(seg, arcWidth, LV_PART_INDICATOR);
+
+        // Angle model: 0°=right, 90°=down, 180°=left, 270°=up (LVGL default).
+        // Slot 0 should be centered at top (270°) and proceed clockwise.
+        const float centerDeg = 270.0f + (float)i * 45.0f;
+        const float startF = centerDeg - (sweepDeg * 0.5f);
+        const float endF = centerDeg + (sweepDeg * 0.5f);
+        int start = (int)lroundf(startF);
+        int end = (int)lroundf(endF);
+        // Normalize to [0, 360)
+        start %= 360;
+        end %= 360;
+        if (start < 0) start += 360;
+        if (end < 0) end += 360;
+
+        lv_arc_set_rotation(seg, 0);
+        lv_arc_set_bg_angles(seg, 0, 0);
+        lv_arc_set_angles(seg, start, end);
+        lv_obj_move_background(seg);
+    }
+
+    // Position the 8 outer icon/label containers. Keep them slightly outward so
+    // the center-to-ring gap stays visually clean.
+    const float rMid = rStrokeMid + (separatorPx * 0.5f);
+    int outerBox = (int)clampf((float)arcWidth * 1.10f, 64.0f, 128.0f);
+    const int outerRadius = outerBox / 2;
+    const int labelWidth = (outerBox > 24) ? (outerBox - 18) : outerBox;
+
+    for (int i = 0; i < 8; i++) {
+        if (!buttons[i]) continue;
+
+        // Make these containers invisible; the segment arc is the background.
+        lv_obj_set_style_bg_opa(buttons[i], LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(buttons[i], 0, 0);
+        lv_obj_set_style_radius(buttons[i], 0, 0);
+
+        // Keep objects around for icon+label layout.
+        lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+
+        lv_obj_set_size(buttons[i], outerBox, outerBox);
+
+        const float deg = -90.0f + (float)i * 45.0f;
+        const float rad = deg * (float)M_PI / 180.0f;
+        const int bx = (int)lroundf((float)cx + rMid * cosf(rad));
+        const int by = (int)lroundf((float)cy + rMid * sinf(rad));
+        lv_obj_set_pos(buttons[i], bx - outerRadius, by - outerRadius);
+
+        if (labels[i]) {
+            lv_obj_set_width(labels[i], labelWidth);
+            lv_obj_center(labels[i]);
+        }
+    }
+
+    // Center slot (8): standard circular button, centered.
+    // Keep the radial gap between the center and the ring equal to the wedge separator.
+    int centerBox = (int)clampf((ringInnerEdge - separatorPx) * 2.0f, 72.0f, (float)minDim);
+    const int centerRadius = centerBox / 2;
+    const int centerLabelWidth = (centerBox > 24) ? (centerBox - 18) : centerBox;
+
+    if (buttons[8]) {
+        lv_obj_set_style_radius(buttons[8], LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(buttons[8], 0, 0);
+        lv_obj_clear_flag(buttons[8], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_size(buttons[8], centerBox, centerBox);
+        lv_obj_set_pos(buttons[8], cx - centerRadius, cy - centerRadius);
+        if (labels[8]) {
+            lv_obj_set_width(labels[8], centerLabelWidth);
+            lv_obj_center(labels[8]);
+        }
+    }
+
+    // Hide all unused slots.
+    for (int i = 9; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        if (buttons[i]) lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 void MacroPadScreen::layoutButtonsFiveStack() {
     if (!screen || !displayMgr) return;
 
@@ -879,13 +1176,24 @@ void MacroPadScreen::refreshButtons(bool force) {
     const MacroConfig* cfg = getMacroConfig();
     if (!cfg) return;
 
+    const char* tpl = (cfg && cfg->template_id[screenIndex][0]) ? cfg->template_id[screenIndex] : macro_templates::default_id();
+    if (!macro_templates::is_valid(tpl)) {
+        tpl = macro_templates::default_id();
+    }
+    const bool isPie = (strcmp(tpl, macro_templates::kTemplateRoundPie8) == 0);
+
+    // Enable/disable pie helpers depending on the active template.
+    if (pieHitLayer) {
+        if (isPie) lv_obj_clear_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
+    }
+
     // Apply macro screen background (optional per-screen override, else global default).
     const uint32_t screenBg = (cfg->screen_bg[screenIndex] != MACROS_COLOR_UNSET)
         ? cfg->screen_bg[screenIndex]
         : cfg->default_screen_bg;
     lv_obj_set_style_bg_color(screen, lv_color_hex(screenBg), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-
     bool anyButtonConfigured = false;
 
     for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
@@ -925,11 +1233,28 @@ void MacroPadScreen::refreshButtons(bool force) {
             : cfg->default_icon_color;
 
         if (buttons[i]) {
-            lv_obj_set_style_bg_color(buttons[i], lv_color_hex(buttonBg), 0);
-            lv_obj_set_style_bg_opa(buttons[i], LV_OPA_COVER, 0);
+            // In pie mode, outer wedge slots (0..7) use the ring segments for background,
+            // so keep the container transparent to avoid square blocks behind the icon.
+            const bool isPieOuter = isPie && (i >= 0 && i < 8);
+            if (isPieOuter) {
+                lv_obj_set_style_bg_opa(buttons[i], LV_OPA_TRANSP, 0);
+            } else {
+                lv_obj_set_style_bg_color(buttons[i], lv_color_hex(buttonBg), 0);
+                lv_obj_set_style_bg_opa(buttons[i], LV_OPA_COVER, 0);
+            }
         }
         if (labels[i]) {
             lv_obj_set_style_text_color(labels[i], lv_color_hex(labelColor), 0);
+        }
+
+        // Pie ring segment background for slots 0..7.
+        if (isPie && i >= 0 && i < 8) {
+            lv_obj_t* seg = pieSegments[i];
+            if (seg) {
+                lv_obj_set_style_arc_color(seg, lv_color_hex(buttonBg), LV_PART_INDICATOR);
+                lv_obj_set_style_arc_opa(seg, LV_OPA_COVER, LV_PART_INDICATOR);
+                lv_obj_clear_flag(seg, LV_OBJ_FLAG_HIDDEN);
+            }
         }
 
         // If an icon is set and the user intentionally left the label blank,
@@ -944,7 +1269,6 @@ void MacroPadScreen::refreshButtons(bool force) {
         const bool labelIsSimpleArrow = (btnCfg->icon_id[0] != '\0') && (
             (btnCfg->label[0] == '<' && btnCfg->label[1] == '\0')
             || (btnCfg->label[0] == '>' && btnCfg->label[1] == '\0'));
-
         char labelBuf[32];
         const char* labelText = btnCfg->label;
         if ((userLabelEmpty || labelIsSimpleArrow) && wantsIcon) {
@@ -1002,6 +1326,25 @@ void MacroPadScreen::refreshButtons(bool force) {
 
         const bool hasLabel = (labelText && *labelText);
         updateButtonLayout((uint8_t)i, hasIcon, hasLabel);
+    }
+
+    // Hide unused pie segments (unconfigured outer slots).
+    if (isPie) {
+        for (int i = 0; i < 8; i++) {
+            const MacroButtonConfig* btnCfg = &cfg->buttons[screenIndex][i];
+            const bool segVisible = (btnCfg && btnCfg->action != MacroButtonAction::None);
+            if (pieSegments[i]) {
+                if (segVisible) {
+                    // kept visible above
+                } else {
+                    lv_obj_add_flag(pieSegments[i], LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < 8; i++) {
+            if (pieSegments[i]) lv_obj_add_flag(pieSegments[i], LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
     updateEmptyState(anyButtonConfigured);
@@ -1086,37 +1429,5 @@ void MacroPadScreen::buttonEventCallback(lv_event_t* e) {
     MacroPadScreen* self = ctx->self;
     const uint8_t b = ctx->buttonIndex;
 
-    #if HAS_DISPLAY
-    screen_saver_manager_notify_activity(true);
-    #endif
-
-    const MacroConfig* cfg = self->getMacroConfig();
-    if (!cfg) return;
-
-    const MacroButtonConfig* btnCfg = &cfg->buttons[self->screenIndex][b];
-    if (!btnCfg) return;
-
-    if (btnCfg->action == MacroButtonAction::None) return;
-
-    if (btnCfg->action == MacroButtonAction::NavNextScreen || btnCfg->action == MacroButtonAction::NavPrevScreen) {
-        const uint8_t next = (btnCfg->action == MacroButtonAction::NavNextScreen)
-            ? (uint8_t)((self->screenIndex + 1) % MACROS_SCREEN_COUNT)
-            : (uint8_t)((self->screenIndex + MACROS_SCREEN_COUNT - 1) % MACROS_SCREEN_COUNT);
-
-        char id[16];
-        snprintf(id, sizeof(id), "macro%u", (unsigned)(next + 1));
-        self->displayMgr->showScreen(id);
-        return;
-    }
-
-    if (btnCfg->action == MacroButtonAction::SendKeys) {
-        if (btnCfg->script[0] == '\0') {
-            Logger.logMessage("Macro", "Empty script; skipping");
-            return;
-        }
-
-        BleKeyboardManager* kb = self->getBleKeyboard();
-        ducky_execute(btnCfg->script, kb);
-        return;
-    }
+    self->handleButtonClick(b);
 }
