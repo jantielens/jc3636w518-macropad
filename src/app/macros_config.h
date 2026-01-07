@@ -27,6 +27,10 @@
 #define MACROS_SCRIPT_MAX_LEN 256
 #define MACROS_ICON_ID_MAX_LEN 32
 
+// Color values are stored as 0xRRGGBB (RGB only).
+// Use 0xFFFFFFFF to indicate an unset optional override (fall back to defaults).
+#define MACROS_COLOR_UNSET 0xFFFFFFFFu
+
 // Template IDs are stored per macro screen.
 // Keep this large enough for descriptive IDs like "round_stack_sides_5".
 #define MACROS_TEMPLATE_ID_MAX_LEN 32
@@ -43,9 +47,23 @@ struct MacroButtonConfig {
     MacroButtonAction action;
     char script[MACROS_SCRIPT_MAX_LEN];
     char icon_id[MACROS_ICON_ID_MAX_LEN];
+
+    // Optional per-button appearance overrides (0xRRGGBB or MACROS_COLOR_UNSET).
+    uint32_t button_bg;
+    uint32_t icon_color;  // Only used for mask icons (IconKind::Mask)
+    uint32_t label_color;
 };
 
 struct MacroConfig {
+    // Global defaults used when per-screen/per-button values are unset.
+    uint32_t default_screen_bg;
+    uint32_t default_button_bg;
+    uint32_t default_icon_color;
+    uint32_t default_label_color;
+
+    // Optional per-screen background overrides (0xRRGGBB or MACROS_COLOR_UNSET).
+    uint32_t screen_bg[MACROS_SCREEN_COUNT];
+
     // Template id per macro screen (NUL-terminated).
     // Stored alongside buttons in the same blob/file.
     char template_id[MACROS_SCREEN_COUNT][MACROS_TEMPLATE_ID_MAX_LEN];

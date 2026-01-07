@@ -6,15 +6,49 @@
         {{NAV}}
 
         <form id="config-form">
+            <!-- Macro Defaults (global theme for macros) -->
+            <section class="section" id="macro-defaults-section">
+                <h2>🌈 Macro Screen Defaults</h2>
+                <div class="grid-4col" style="gap: 12px;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="macro_default_screen_bg">Screen</label>
+                        <input type="color" class="color-picker" id="macro_default_screen_bg" name="macro_default_screen_bg" value="#000000">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="macro_default_button_bg">Button</label>
+                        <input type="color" class="color-picker" id="macro_default_button_bg" name="macro_default_button_bg" value="#1e1e1e">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="macro_default_icon_color">Icon</label>
+                        <input type="color" class="color-picker" id="macro_default_icon_color" name="macro_default_icon_color" value="#ffffff">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="macro_default_label_color">Label</label>
+                        <input type="color" class="color-picker" id="macro_default_label_color" name="macro_default_label_color" value="#ffffff">
+                    </div>
+                </div>
+                <small style="margin-top: 10px;">Defaults apply when per-screen/per-button overrides are not enabled.</small>
+            </section>
+
             <!-- Macros Editor -->
             <section class="section" id="macros-section">
                 <h2>⌨️ Macros</h2>
                 <div class="macro-editor">
                     <div class="macro-editor-header">
-                        <div class="form-group">
-                            <label for="macro_screen_select">Macro screen</label>
-                            <select id="macro_screen_select" name="macro_screen_select"></select>
-                            <small>Select which macro screen you’re editing.</small>
+                        <div class="grid-2col" style="gap: 12px;">
+                            <div>
+                                <label for="macro_screen_select" style="display:block; font-size: 14px; font-weight: 600; color: #1d1d1f; margin-bottom: 8px; letter-spacing: -0.1px;">Macro screen</label>
+                                <select id="macro_screen_select" name="macro_screen_select"></select>
+                                <small>Select which macro screen you’re editing.</small>
+                            </div>
+                            <div>
+                                <label for="macro_screen_bg" style="display:block; font-size: 14px; font-weight: 600; color: #1d1d1f; margin-bottom: 8px; letter-spacing: -0.1px;">Screen background</label>
+                                <div class="color-inline">
+                                    <input type="checkbox" id="macro_screen_bg_enabled" name="macro_screen_bg_enabled">
+                                    <input type="color" class="color-picker" id="macro_screen_bg" name="macro_screen_bg" value="#000000">
+                                </div>
+                                <small>Unchecked = use default screen background.</small>
+                            </div>
                         </div>
 
                         <div class="form-group">
@@ -55,12 +89,45 @@
                         </div>
 
                         <div class="form-group" id="macro_script_group">
-                            <label for="macro_script">Keys Script</label>
-                            <textarea id="macro_script" name="macro_script" rows="10" maxlength="255" placeholder="Example:&#10;STRING Hello world&#10;ENTER&#10;"></textarea>
+                            <div class="label-row">
+                                <label for="macro_script">Keys Script</label>
+                                <button type="button" class="link-button" id="ducky_help_open" aria-haspopup="dialog" aria-controls="ducky_help_overlay">Syntax help</button>
+                            </div>
+                            <textarea id="macro_script" name="macro_script" rows="5" maxlength="255" placeholder="Example:&#10;STRING Hello world&#10;ENTER&#10;"></textarea>
                             <small id="macro_script_help">
                                 Used when Action is <strong>Keys Script</strong> (DuckyScript-like subset).
                                 <span style="margin-left: 8px;">Chars: <span id="macro_script_chars">0</span>/255</span>
                             </small>
+                        </div>
+
+
+                        <div id="ducky_help_overlay" class="reboot-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="ducky_help_title">
+                            <div class="reboot-modal ducky-help-modal">
+                                <div class="ducky-help-header">
+                                    <button type="button" class="link-button" id="ducky_help_close" aria-label="Close">Close</button>
+                                    <h2 id="ducky_help_title" style="margin: 0;">Keys Script (DuckyScript subset)</h2>
+                                </div>
+
+                                <p style="margin: 0 0 10px 0;">Commands and tokens are case-insensitive. Unknown tokens are ignored and logged.</p>
+
+                                <h3 class="ducky-help-h">Supported commands</h3>
+                                <div class="code-block"><code>STRING &lt;text&gt;<br>DELAY &lt;ms&gt;</code></div>
+
+                                <h3 class="ducky-help-h">Supported key tokens</h3>
+                                <div class="code-block"><code>A..Z, 0..9<br>ENTER, TAB, ESCAPE, BACKSPACE, SPACE<br>UPARROW, DOWNARROW, LEFTARROW, RIGHTARROW<br>HOME, END, PAGEUP, PAGEDOWN<br>F1..F12<br>VOLUMEUP, VOLUMEDOWN, MUTE, PLAYPAUSE, NEXTTRACK, PREVTRACK</code></div>
+
+                                <h3 class="ducky-help-h">Modifiers (before the key)</h3>
+                                <div class="code-block"><code>CTRL, SHIFT, ALT, GUI<br>(aliases: WIN, CMD)</code></div>
+
+                                <h3 class="ducky-help-h">Examples</h3>
+                                <div class="code-block"><code># Type text then press Enter<br>STRING Hello world<br>ENTER<br><br># Win+R (open Run dialog)<br>GUI r<br><br># Win+Alt+K (Global Mute in Windows)<br>WIN ALT k</code></div>
+
+                                <h3 class="ducky-help-h">Gotchas</h3>
+                                <ul style="margin: 0; padding-left: 18px;">
+                                    <li>Prefer lowercase for letter keys in chords (e.g. <code>k</code>, not <code>K</code>), because uppercase can imply Shift.</li>
+                                    <li><code>KEY</code> is not a valid token; use the actual key name (e.g. <code>k</code>).</li>
+                                </ul>
+                            </div>
                         </div>
 
                         <div class="form-group">
@@ -68,6 +135,35 @@
                             <input type="text" id="macro_icon_id" name="macro_icon_id" maxlength="31" placeholder="e.g., mic_off" list="macro_icon_id_list" autocomplete="off">
                             <datalist id="macro_icon_id_list"></datalist>
                             <small>Start typing to see available icons (auto-populated from the firmware’s compiled icon registry).</small>
+                        </div>
+
+                        <div class="grid-3col" style="gap: 12px;">
+                            <div class="form-group color-field" style="margin-bottom: 0;">
+                                <label>Button background</label>
+                                <div class="color-inline">
+                                    <input type="checkbox" id="macro_button_bg_enabled" name="macro_button_bg_enabled">
+                                    <input type="color" class="color-picker" id="macro_button_bg" name="macro_button_bg" value="#1e1e1e">
+                                </div>
+                                <small>Unchecked = default.</small>
+                            </div>
+
+                            <div class="form-group color-field" style="margin-bottom: 0;">
+                                <label>Icon tint (mask icons only)</label>
+                                <div class="color-inline">
+                                    <input type="checkbox" id="macro_icon_color_enabled" name="macro_icon_color_enabled">
+                                    <input type="color" class="color-picker" id="macro_icon_color" name="macro_icon_color" value="#ffffff">
+                                </div>
+                                <small>Color icons ignore.</small>
+                            </div>
+
+                            <div class="form-group color-field" style="margin-bottom: 0;">
+                                <label>Label color</label>
+                                <div class="color-inline">
+                                    <input type="checkbox" id="macro_label_color_enabled" name="macro_label_color_enabled">
+                                    <input type="color" class="color-picker" id="macro_label_color" name="macro_label_color" value="#ffffff">
+                                </div>
+                                <small>Unchecked = default.</small>
+                            </div>
                         </div>
                     </div>
                 </div>

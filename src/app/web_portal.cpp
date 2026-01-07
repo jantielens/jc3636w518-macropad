@@ -193,6 +193,11 @@ static MacroButtonAction macro_action_from_string(const char* s) {
     return MacroButtonAction::None;
 }
 
+static uint32_t clamp_rgb24(uint32_t v) {
+    // Colors are RGB-only: 0xRRGGBB
+    return v & 0x00FFFFFFu;
+}
+
 static void macros_cache_load_if_needed() {
     if (g_macros_loaded) return;
     g_macros_loaded = true;
@@ -209,8 +214,20 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
-    response->print("{\"success\":true,\"version\":5,\"buttons_per_screen\":");
+    response->print("{\"success\":true,\"version\":6,\"buttons_per_screen\":");
     response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
+
+    // Global defaults (always present)
+    response->print(",\"defaults\":{");
+    response->print("\"screen_bg\":");
+    response->print((unsigned)macro_config.default_screen_bg);
+    response->print(",\"button_bg\":");
+    response->print((unsigned)macro_config.default_button_bg);
+    response->print(",\"icon_color\":");
+    response->print((unsigned)macro_config.default_icon_color);
+    response->print(",\"label_color\":");
+    response->print((unsigned)macro_config.default_label_color);
+    response->print("}");
 
     // Templates (for the web editor)
     response->print(",\"templates\":[");
@@ -250,7 +267,15 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
         response->print("{\"template\":\"");
         response->print(tpl);
-        response->print("\",\"buttons\":[");
+        response->print("\"");
+
+        // Optional per-screen override
+        if (macro_config.screen_bg[s] != MACROS_COLOR_UNSET) {
+            response->print(",\"screen_bg\":");
+            response->print((unsigned)macro_config.screen_bg[s]);
+        }
+
+        response->print(",\"buttons\":[");
 
         for (int b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
             const MacroButtonConfig *btn = &macro_config.buttons[s][b];
@@ -262,6 +287,10 @@ void handleGetMacros(AsyncWebServerRequest *request) {
             item["action"] = macro_action_to_string(btn->action);
             item["script"] = btn->script;
             item["icon_id"] = btn->icon_id;
+
+            if (btn->button_bg != MACROS_COLOR_UNSET) item["button_bg"] = btn->button_bg;
+            if (btn->icon_color != MACROS_COLOR_UNSET) item["icon_color"] = btn->icon_color;
+            if (btn->label_color != MACROS_COLOR_UNSET) item["label_color"] = btn->label_color;
             serializeJson(item, *response);
         }
 
@@ -407,6 +436,15 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     }
     macros_config_set_defaults(next);
 
+    // Global defaults
+    if (doc.containsKey("defaults") && doc["defaults"].is<JsonObject>()) {
+        JsonObject d = doc["defaults"].as<JsonObject>();
+        if (d.containsKey("screen_bg")) next->default_screen_bg = clamp_rgb24(d["screen_bg"] | next->default_screen_bg);
+        if (d.containsKey("button_bg")) next->default_button_bg = clamp_rgb24(d["button_bg"] | next->default_button_bg);
+        if (d.containsKey("icon_color")) next->default_icon_color = clamp_rgb24(d["icon_color"] | next->default_icon_color);
+        if (d.containsKey("label_color")) next->default_label_color = clamp_rgb24(d["label_color"] | next->default_label_color);
+    }
+
     for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
         JsonVariant sv = screens[s];
         if (!sv.is<JsonObject>()) {
@@ -415,6 +453,13 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             return;
         }
         JsonObject so = sv.as<JsonObject>();
+
+        // Optional per-screen background override.
+        if (so.containsKey("screen_bg")) {
+            next->screen_bg[s] = clamp_rgb24(so["screen_bg"] | 0);
+        } else {
+            next->screen_bg[s] = MACROS_COLOR_UNSET;
+        }
 
         // Optional template selection (defaults to the firmware default if missing/invalid).
         const char* tpl = so["template"] | macro_templates::default_id();
@@ -453,6 +498,11 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             next->buttons[s][b].action = macro_action_from_string(action_s);
             strlcpy(next->buttons[s][b].script, script, sizeof(next->buttons[s][b].script));
             strlcpy(next->buttons[s][b].icon_id, icon_id, sizeof(next->buttons[s][b].icon_id));
+
+            // Optional per-button appearance overrides.
+            next->buttons[s][b].button_bg = bo.containsKey("button_bg") ? clamp_rgb24(bo["button_bg"] | 0) : MACROS_COLOR_UNSET;
+            next->buttons[s][b].icon_color = bo.containsKey("icon_color") ? clamp_rgb24(bo["icon_color"] | 0) : MACROS_COLOR_UNSET;
+            next->buttons[s][b].label_color = bo.containsKey("label_color") ? clamp_rgb24(bo["label_color"] | 0) : MACROS_COLOR_UNSET;
 
             // Normalize: if action is none, clear script/icon to keep state tidy.
             if (next->buttons[s][b].action == MacroButtonAction::None) {

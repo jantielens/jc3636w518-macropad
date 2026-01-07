@@ -879,6 +879,13 @@ void MacroPadScreen::refreshButtons(bool force) {
     const MacroConfig* cfg = getMacroConfig();
     if (!cfg) return;
 
+    // Apply macro screen background (optional per-screen override, else global default).
+    const uint32_t screenBg = (cfg->screen_bg[screenIndex] != MACROS_COLOR_UNSET)
+        ? cfg->screen_bg[screenIndex]
+        : cfg->default_screen_bg;
+    lv_obj_set_style_bg_color(screen, lv_color_hex(screenBg), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+
     bool anyButtonConfigured = false;
 
     for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
@@ -905,6 +912,25 @@ void MacroPadScreen::refreshButtons(bool force) {
         }
 
         if (!visible) continue;
+
+        // Per-button appearance (optional overrides, else global defaults).
+        const uint32_t buttonBg = (btnCfg->button_bg != MACROS_COLOR_UNSET)
+            ? btnCfg->button_bg
+            : cfg->default_button_bg;
+        const uint32_t labelColor = (btnCfg->label_color != MACROS_COLOR_UNSET)
+            ? btnCfg->label_color
+            : cfg->default_label_color;
+        const uint32_t iconColor = (btnCfg->icon_color != MACROS_COLOR_UNSET)
+            ? btnCfg->icon_color
+            : cfg->default_icon_color;
+
+        if (buttons[i]) {
+            lv_obj_set_style_bg_color(buttons[i], lv_color_hex(buttonBg), 0);
+            lv_obj_set_style_bg_opa(buttons[i], LV_OPA_COVER, 0);
+        }
+        if (labels[i]) {
+            lv_obj_set_style_text_color(labels[i], lv_color_hex(labelColor), 0);
+        }
 
         // If an icon is set and the user intentionally left the label blank,
         // respect that (icon-only button) instead of forcing a default label.
@@ -954,7 +980,7 @@ void MacroPadScreen::refreshButtons(bool force) {
                 lv_obj_set_style_opa(icons[i], LV_OPA_COVER, 0);
                 if (ref.kind == IconKind::Mask) {
                     // Monochrome: recolor/tint via style.
-                    lv_obj_set_style_img_recolor(icons[i], lv_color_white(), 0);
+                    lv_obj_set_style_img_recolor(icons[i], lv_color_hex(iconColor), 0);
                     lv_obj_set_style_img_recolor_opa(icons[i], LV_OPA_COVER, 0);
                     lv_obj_set_style_img_opa(icons[i], LV_OPA_COVER, 0);
                 } else {

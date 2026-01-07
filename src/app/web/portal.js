@@ -56,12 +56,71 @@ const MACROS_ICON_ID_MAX = 31;
 // Keep in sync with src/app/macro_templates.h (macro_templates::default_id()).
 const MACROS_DEFAULT_TEMPLATE_ID = 'round_ring_9';
 
-let macrosPayloadCache = null; // { screens: [ { buttons: [ {label, action, script, icon_id}, ... ] }, ... ] }
+// Default colors (RGB only: 0xRRGGBB). Must match firmware defaults.
+const MACROS_DEFAULT_COLORS = {
+    screen_bg: 0x000000,
+    button_bg: 0x1E1E1E,
+    icon_color: 0xFFFFFF,
+    label_color: 0xFFFFFF,
+};
+
+let macrosPayloadCache = null; // { defaults:{...}, screens: [ { template, screen_bg?, buttons:[{label, action, script, icon_id, button_bg?, icon_color?, label_color?}, ...] }, ... ] }
 let macrosTemplatesCache = []; // [{id,name,selector_layout}, ...]
 let macrosSelectedScreen = 0; // 0-based
 let macrosSelectedButton = 0; // 0-based
 let macrosDirty = false;
 let macrosLoading = false;
+
+function macrosClampRgb24(value) {
+    const v = (typeof value === 'number' && isFinite(value)) ? value : 0;
+    return (v >>> 0) & 0x00FFFFFF;
+}
+
+function macrosColorToHex(value) {
+    const v = macrosClampRgb24(value);
+    return '#' + v.toString(16).padStart(6, '0');
+}
+
+function macrosHexToColor(hex) {
+    const s = (hex || '').toString().trim();
+    const m = /^#?([0-9a-fA-F]{6})$/.exec(s);
+    if (!m) return null;
+    return parseInt(m[1], 16) & 0x00FFFFFF;
+}
+
+function initDuckyHelpDialog() {
+    const openBtn = document.getElementById('ducky_help_open');
+    const overlay = document.getElementById('ducky_help_overlay');
+    if (!openBtn || !overlay) return; // Not on Home page
+
+    const closeBtn = document.getElementById('ducky_help_close');
+
+    const open = () => {
+        overlay.style.display = 'flex';
+    };
+
+    const close = () => {
+        overlay.style.display = 'none';
+    };
+
+    openBtn.addEventListener('click', open);
+    if (closeBtn) closeBtn.addEventListener('click', close);
+
+    // Click outside to close
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+    });
+
+    // Escape to close
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && overlay.style.display !== 'none') close();
+    });
+}
+
+function macrosGetSelectedScreenObj() {
+    if (!macrosPayloadCache) return null;
+    return macrosPayloadCache.screens[macrosSelectedScreen] || null;
+}
 
 // ===== ICONS (Home) =====
 let iconListCache = null; // [{id, kind}, ...]
@@ -129,7 +188,7 @@ function macrosCreateEmptyButton() {
 }
 
 function macrosCreateEmptyPayload() {
-    const payload = { screens: [] };
+    const payload = { defaults: { ...MACROS_DEFAULT_COLORS }, screens: [] };
     for (let s = 0; s < macrosScreenCount; s++) {
         const buttons = [];
         for (let b = 0; b < macrosButtonsPerScreen; b++) {
@@ -144,6 +203,17 @@ function macrosNormalizePayload(payload) {
     const out = macrosCreateEmptyPayload();
     if (!payload || !Array.isArray(payload.screens)) return out;
 
+    // Defaults
+    if (payload.defaults && typeof payload.defaults === 'object') {
+        const d = payload.defaults;
+        out.defaults = {
+            screen_bg: macrosClampRgb24(typeof d.screen_bg === 'number' ? d.screen_bg : MACROS_DEFAULT_COLORS.screen_bg),
+            button_bg: macrosClampRgb24(typeof d.button_bg === 'number' ? d.button_bg : MACROS_DEFAULT_COLORS.button_bg),
+            icon_color: macrosClampRgb24(typeof d.icon_color === 'number' ? d.icon_color : MACROS_DEFAULT_COLORS.icon_color),
+            label_color: macrosClampRgb24(typeof d.label_color === 'number' ? d.label_color : MACROS_DEFAULT_COLORS.label_color),
+        };
+    }
+
     if (Array.isArray(payload.templates)) {
         macrosTemplatesCache = payload.templates;
     }
@@ -156,14 +226,26 @@ function macrosNormalizePayload(payload) {
             out.screens[s].template = String(screen.template);
         }
 
+        // Optional per-screen override
+        if (typeof screen.screen_bg === 'number' && isFinite(screen.screen_bg)) {
+            out.screens[s].screen_bg = macrosClampRgb24(screen.screen_bg);
+        }
+
         for (let b = 0; b < Math.min(macrosButtonsPerScreen, screen.buttons.length); b++) {
             const btn = screen.buttons[b] || {};
-            out.screens[s].buttons[b] = {
+            const next = {
                 label: (btn.label || ''),
                 action: (btn.action || 'none'),
                 script: (btn.script || ''),
                 icon_id: (btn.icon_id || ''),
             };
+
+            // Optional per-button appearance overrides
+            if (typeof btn.button_bg === 'number' && isFinite(btn.button_bg)) next.button_bg = macrosClampRgb24(btn.button_bg);
+            if (typeof btn.icon_color === 'number' && isFinite(btn.icon_color)) next.icon_color = macrosClampRgb24(btn.icon_color);
+            if (typeof btn.label_color === 'number' && isFinite(btn.label_color)) next.label_color = macrosClampRgb24(btn.label_color);
+
+            out.screens[s].buttons[b] = next;
         }
     }
 
@@ -382,12 +464,71 @@ function macrosRenderEditorFields() {
     }
 }
 
+function macrosRenderColorFields() {
+    const payload = macrosPayloadCache;
+    if (!payload) return;
+
+    // Defaults
+    const d = payload.defaults || MACROS_DEFAULT_COLORS;
+    const defScreenEl = document.getElementById('macro_default_screen_bg');
+    const defBtnEl = document.getElementById('macro_default_button_bg');
+    const defIconEl = document.getElementById('macro_default_icon_color');
+    const defLabelEl = document.getElementById('macro_default_label_color');
+    if (defScreenEl) defScreenEl.value = macrosColorToHex(d.screen_bg);
+    if (defBtnEl) defBtnEl.value = macrosColorToHex(d.button_bg);
+    if (defIconEl) defIconEl.value = macrosColorToHex(d.icon_color);
+    if (defLabelEl) defLabelEl.value = macrosColorToHex(d.label_color);
+
+    // Per-screen override
+    const screen = macrosGetSelectedScreenObj();
+    const screenEnabledEl = document.getElementById('macro_screen_bg_enabled');
+    const screenColorEl = document.getElementById('macro_screen_bg');
+    const screenHasOverride = !!(screen && typeof screen.screen_bg === 'number');
+    if (screenEnabledEl) screenEnabledEl.checked = screenHasOverride;
+    if (screenColorEl) {
+        screenColorEl.disabled = !screenHasOverride;
+        screenColorEl.value = macrosColorToHex(screenHasOverride ? screen.screen_bg : d.screen_bg);
+    }
+
+    // Per-button overrides
+    const btn = macrosGetSelectedButton();
+    const btnBgEnabledEl = document.getElementById('macro_button_bg_enabled');
+    const btnBgEl = document.getElementById('macro_button_bg');
+    const iconEnabledEl = document.getElementById('macro_icon_color_enabled');
+    const iconEl = document.getElementById('macro_icon_color');
+    const labelEnabledEl = document.getElementById('macro_label_color_enabled');
+    const labelEl = document.getElementById('macro_label_color');
+
+    const hasBtnBg = !!(btn && typeof btn.button_bg === 'number');
+    const hasIconColor = !!(btn && typeof btn.icon_color === 'number');
+    const hasLabelColor = !!(btn && typeof btn.label_color === 'number');
+
+    if (btnBgEnabledEl) btnBgEnabledEl.checked = hasBtnBg;
+    if (btnBgEl) {
+        btnBgEl.disabled = !hasBtnBg;
+        btnBgEl.value = macrosColorToHex(hasBtnBg ? btn.button_bg : d.button_bg);
+    }
+
+    if (iconEnabledEl) iconEnabledEl.checked = hasIconColor;
+    if (iconEl) {
+        iconEl.disabled = !hasIconColor;
+        iconEl.value = macrosColorToHex(hasIconColor ? btn.icon_color : d.icon_color);
+    }
+
+    if (labelEnabledEl) labelEnabledEl.checked = hasLabelColor;
+    if (labelEl) {
+        labelEl.disabled = !hasLabelColor;
+        labelEl.value = macrosColorToHex(hasLabelColor ? btn.label_color : d.label_color);
+    }
+}
+
 function macrosRenderAll() {
     macrosApplyTemplateLayout();
     macrosRenderScreenSelect();
     macrosRenderTemplateSelect();
     macrosRenderButtonGrid();
     macrosRenderEditorFields();
+    macrosRenderColorFields();
 }
 
 function macrosBindEditorEvents() {
@@ -472,6 +613,110 @@ function macrosBindEditorEvents() {
         });
     }
 
+    // ===== Color defaults (global) =====
+    const defScreenEl = document.getElementById('macro_default_screen_bg');
+    const defBtnEl = document.getElementById('macro_default_button_bg');
+    const defIconEl = document.getElementById('macro_default_icon_color');
+    const defLabelEl = document.getElementById('macro_default_label_color');
+
+    function ensureDefaults() {
+        if (!macrosPayloadCache) return null;
+        if (!macrosPayloadCache.defaults) macrosPayloadCache.defaults = { ...MACROS_DEFAULT_COLORS };
+        return macrosPayloadCache.defaults;
+    }
+
+    function bindDefaultColor(inputEl, key) {
+        if (!inputEl) return;
+        inputEl.addEventListener('input', () => {
+            const d = ensureDefaults();
+            if (!d) return;
+            const v = macrosHexToColor(inputEl.value);
+            if (v === null) return;
+            d[key] = macrosClampRgb24(v);
+            macrosSetDirty(true);
+        });
+    }
+
+    bindDefaultColor(defScreenEl, 'screen_bg');
+    bindDefaultColor(defBtnEl, 'button_bg');
+    bindDefaultColor(defIconEl, 'icon_color');
+    bindDefaultColor(defLabelEl, 'label_color');
+
+    // ===== Per-screen override =====
+    const screenEnabledEl = document.getElementById('macro_screen_bg_enabled');
+    const screenColorEl = document.getElementById('macro_screen_bg');
+    function applyScreenBgFromUI() {
+        const screen = macrosGetSelectedScreenObj();
+        if (!screen || !screenEnabledEl || !screenColorEl) return;
+        if (!screenEnabledEl.checked) {
+            delete screen.screen_bg;
+        } else {
+            const v = macrosHexToColor(screenColorEl.value);
+            if (v !== null) screen.screen_bg = macrosClampRgb24(v);
+        }
+        macrosSetDirty(true);
+        macrosRenderColorFields();
+    }
+    if (screenEnabledEl) screenEnabledEl.addEventListener('change', applyScreenBgFromUI);
+    if (screenColorEl) screenColorEl.addEventListener('input', () => {
+        if (screenEnabledEl && screenEnabledEl.checked) applyScreenBgFromUI();
+    });
+
+    // ===== Per-button overrides =====
+    const btnBgEnabledEl = document.getElementById('macro_button_bg_enabled');
+    const btnBgEl = document.getElementById('macro_button_bg');
+    const iconColorEnabledEl = document.getElementById('macro_icon_color_enabled');
+    const iconColorEl = document.getElementById('macro_icon_color');
+    const labelColorEnabledEl = document.getElementById('macro_label_color_enabled');
+    const labelColorEl = document.getElementById('macro_label_color');
+
+    function applyButtonColorsFromUI() {
+        const btn = macrosGetSelectedButton();
+        if (!btn) return;
+
+        if (btnBgEnabledEl && btnBgEl) {
+            if (!btnBgEnabledEl.checked) delete btn.button_bg;
+            else {
+                const v = macrosHexToColor(btnBgEl.value);
+                if (v !== null) btn.button_bg = macrosClampRgb24(v);
+            }
+        }
+
+        if (iconColorEnabledEl && iconColorEl) {
+            if (!iconColorEnabledEl.checked) delete btn.icon_color;
+            else {
+                const v = macrosHexToColor(iconColorEl.value);
+                if (v !== null) btn.icon_color = macrosClampRgb24(v);
+            }
+        }
+
+        if (labelColorEnabledEl && labelColorEl) {
+            if (!labelColorEnabledEl.checked) delete btn.label_color;
+            else {
+                const v = macrosHexToColor(labelColorEl.value);
+                if (v !== null) btn.label_color = macrosClampRgb24(v);
+            }
+        }
+
+        macrosSetDirty(true);
+        macrosRenderColorFields();
+    }
+
+    if (btnBgEnabledEl) btnBgEnabledEl.addEventListener('change', applyButtonColorsFromUI);
+    if (btnBgEl) btnBgEl.addEventListener('input', () => {
+        if (btnBgEnabledEl && btnBgEnabledEl.checked) applyButtonColorsFromUI();
+    });
+
+    if (iconColorEnabledEl) iconColorEnabledEl.addEventListener('change', applyButtonColorsFromUI);
+    if (iconColorEl) iconColorEl.addEventListener('input', () => {
+        if (iconColorEnabledEl && iconColorEnabledEl.checked) applyButtonColorsFromUI();
+    });
+
+    if (labelColorEnabledEl) labelColorEnabledEl.addEventListener('change', applyButtonColorsFromUI);
+    if (labelColorEl) labelColorEl.addEventListener('input', () => {
+        if (labelColorEnabledEl && labelColorEnabledEl.checked) applyButtonColorsFromUI();
+    });
+
 }
 
 async function loadMacros() {
@@ -530,6 +775,17 @@ function macrosValidatePayload(payload) {
     if (!payload || !Array.isArray(payload.screens) || payload.screens.length !== macrosScreenCount) {
         return { valid: false, message: `Invalid payload (expected ${macrosScreenCount} screens)` };
     }
+
+    if (!payload.defaults || typeof payload.defaults !== 'object') {
+        return { valid: false, message: 'Invalid payload (missing defaults)' };
+    }
+    const d = payload.defaults;
+    for (const k of ['screen_bg', 'button_bg', 'icon_color', 'label_color']) {
+        if (typeof d[k] !== 'number' || !isFinite(d[k])) {
+            return { valid: false, message: `Invalid payload (defaults.${k} must be a number)` };
+        }
+    }
+
     for (let s = 0; s < macrosScreenCount; s++) {
         const screen = payload.screens[s];
         if (!screen || !Array.isArray(screen.buttons) || screen.buttons.length !== macrosButtonsPerScreen) {
@@ -1971,6 +2227,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Add screen selection dropdown event handler
+
+    // Home page: DuckyScript help modal
+    initDuckyHelpDialog();
     const screenSelect = document.getElementById('screen_selection');
     if (screenSelect) {
         screenSelect.addEventListener('change', handleScreenChange);
