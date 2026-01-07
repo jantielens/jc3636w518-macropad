@@ -16,6 +16,7 @@ const API_FIRMWARE_LATEST = '/api/firmware/latest';
 const API_FIRMWARE_UPDATE = '/api/firmware/update';
 const API_FIRMWARE_UPDATE_STATUS = '/api/firmware/update/status';
 const API_MACROS = '/api/macros';
+const API_ICONS = '/api/icons';
 
 let selectedFile = null;
 let portalMode = 'full'; // 'core' or 'full'
@@ -61,6 +62,41 @@ let macrosSelectedScreen = 0; // 0-based
 let macrosSelectedButton = 0; // 0-based
 let macrosDirty = false;
 let macrosLoading = false;
+
+// ===== ICONS (Home) =====
+let iconListCache = null; // [{id, kind}, ...]
+
+function iconsRenderDatalist() {
+    const dl = document.getElementById('macro_icon_id_list');
+    if (!dl) return;
+
+    dl.innerHTML = '';
+
+    const icons = Array.isArray(iconListCache) ? iconListCache : [];
+    for (const icon of icons) {
+        if (!icon || !icon.id) continue;
+        const opt = document.createElement('option');
+        opt.value = String(icon.id);
+        dl.appendChild(opt);
+    }
+}
+
+async function loadIcons() {
+    const dl = document.getElementById('macro_icon_id_list');
+    if (!dl) return; // Not on Home page
+
+    try {
+        const response = await fetch(API_ICONS);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        iconListCache = Array.isArray(data.icons) ? data.icons : [];
+        iconsRenderDatalist();
+    } catch (error) {
+        console.warn('Failed to load icons list:', error);
+        iconListCache = [];
+        iconsRenderDatalist();
+    }
+}
 
 function macrosGetSelectedTemplateId() {
     if (!macrosPayloadCache) return '';
@@ -573,6 +609,7 @@ function initMacrosEditor() {
 
     // Kick off load first so macrosLoading becomes true synchronously.
     loadMacros();
+    loadIcons();
     macrosRenderAll();
 }
 

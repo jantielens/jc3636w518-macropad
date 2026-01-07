@@ -15,6 +15,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Tuple
 
 
@@ -36,24 +37,50 @@ except Exception as exc:  # pragma: no cover
 _VALID_C_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
+class LvglColorFormat(str, Enum):
+    TRUE_COLOR_ALPHA = "true_color_alpha"
+    ALPHA_8BIT = "alpha_8bit"
+    ALPHA_4BIT = "alpha_4bit"
+
+
 @dataclass(frozen=True)
 class LvglImage:
     symbol: str
     width: int
     height: int
     data: bytes
+    lv_cf: str
     map_name: str
     source_file: str
 
 
-def _read_png_to_true_color_alpha_bytes(png_path: str) -> Tuple[int, int, bytes]:
+def _load_png_rgba(png_path: str) -> "Image.Image":
     img = Image.open(png_path)
-    img = img.convert("RGBA")
+    return img.convert("RGBA")
 
+
+def _enforce_or_resize_square(img: "Image.Image", png_path: str, size: int, resize: bool) -> "Image.Image":
     width, height = img.size
-    pixels = list(img.getdata())
+    if width == size and height == size:
+        return img
 
+    if not resize:
+        raise SystemExit(
+            "ERROR: PNG has unexpected size.\n"
+            f"  File: {png_path}\n"
+            f"  Got:  {width}x{height}\n"
+            f"  Need: {size}x{size}\n"
+            "\n"
+            "Fix: resize the PNG to the expected size, or pass --resize to auto-resize."
+        )
+
+    # Stretch resize. (For icons, designers should ideally export at the right size.)
+    return img.resize((size, size), resample=Image.Resampling.LANCZOS)
+
+
+def _rgba_to_true_color_alpha_bytes(img: "Image.Image") -> bytes:
     # LVGL TRUE_COLOR_ALPHA: RGB565 (LE, 2 bytes) + alpha (1 byte) per pixel.
+    pixels = list(img.getdata())
     out = bytearray()
     out_extend = out.extend
 
@@ -62,10 +89,39 @@ def _read_png_to_true_color_alpha_bytes(png_path: str) -> Tuple[int, int, bytes]
         g6 = (g >> 2) & 0x3F
         b5 = (b >> 3) & 0x1F
         rgb565 = (r5 << 11) | (g6 << 5) | b5
-
         out_extend((rgb565 & 0xFF, (rgb565 >> 8) & 0xFF, a))
 
-    return width, height, bytes(out)
+    return bytes(out)
+
+
+def _rgba_to_alpha8_bytes(img: "Image.Image") -> bytes:
+    pixels = list(img.getdata())
+    out = bytearray(len(pixels))
+    for i, (_r, _g, _b, a) in enumerate(pixels):
+        out[i] = a
+    return bytes(out)
+
+
+def _rgba_to_alpha4_bytes(img: "Image.Image") -> bytes:
+    pixels = list(img.getdata())
+    out = bytearray((len(pixels) + 1) // 2)
+    oi = 0
+    hi = True
+    cur = 0
+    for (_r, _g, _b, a) in pixels:
+        a4 = (a >> 4) & 0x0F
+        if hi:
+            cur = (a4 << 4)
+            hi = False
+        else:
+            cur |= a4
+            out[oi] = cur
+            oi += 1
+            hi = True
+
+    if not hi:
+        out[oi] = cur
+    return bytes(out)
 
 
 def _list_top_level_pngs(input_dir: str) -> List[str]:
@@ -164,7 +220,7 @@ def _write_c(path_c: str, header_basename: str, images: List[LvglImage]) -> None
 
             f.write(f"const lv_img_dsc_t {img.symbol} = {{\n")
             f.write("  {\n")
-            f.write("    LV_IMG_CF_TRUE_COLOR_ALPHA,\n")
+            f.write(f"    {img.lv_cf},\n")
             f.write("    0,\n")
             f.write("    0,\n")
             f.write(f"    {img.width},\n")
@@ -183,6 +239,23 @@ def main() -> int:
     ap.add_argument("output_c", help="Output .c file path")
     ap.add_argument("output_h", help="Output .h file path")
     ap.add_argument("--prefix", default="img_", help="Symbol name prefix (default: img_)")
+    ap.add_argument(
+        "--format",
+        default=LvglColorFormat.TRUE_COLOR_ALPHA.value,
+        choices=[e.value for e in LvglColorFormat],
+        help="Output LVGL color format: true_color_alpha (default), alpha_8bit, alpha_4bit",
+    )
+    ap.add_argument(
+        "--size",
+        type=int,
+        default=0,
+        help="If set, require square PNGs of this size (e.g. 64).",
+    )
+    ap.add_argument(
+        "--resize",
+        action="store_true",
+        help="If --size is set and PNGs are not the right size, auto-resize to the requested size.",
+    )
 
     args = ap.parse_args()
 
@@ -190,6 +263,9 @@ def main() -> int:
     output_c = args.output_c
     output_h = args.output_h
     prefix = args.prefix
+    fmt = LvglColorFormat(args.format)
+    size = int(args.size or 0)
+    resize = bool(args.resize)
 
     if not os.path.isdir(input_dir):
         raise SystemExit(f"ERROR: Input directory not found: {input_dir}")
@@ -215,7 +291,23 @@ def main() -> int:
             )
         seen_symbols.add(symbol)
 
-        width, height, data = _read_png_to_true_color_alpha_bytes(png_path)
+        img = _load_png_rgba(png_path)
+        if size > 0:
+            img = _enforce_or_resize_square(img, png_path, size=size, resize=resize)
+
+        width, height = img.size
+
+        if fmt == LvglColorFormat.TRUE_COLOR_ALPHA:
+            data = _rgba_to_true_color_alpha_bytes(img)
+            lv_cf = "LV_IMG_CF_TRUE_COLOR_ALPHA"
+        elif fmt == LvglColorFormat.ALPHA_8BIT:
+            data = _rgba_to_alpha8_bytes(img)
+            lv_cf = "LV_IMG_CF_ALPHA_8BIT"
+        elif fmt == LvglColorFormat.ALPHA_4BIT:
+            data = _rgba_to_alpha4_bytes(img)
+            lv_cf = "LV_IMG_CF_ALPHA_4BIT"
+        else:
+            raise SystemExit(f"ERROR: Unsupported format: {fmt}")
 
         images.append(
             LvglImage(
@@ -223,6 +315,7 @@ def main() -> int:
                 width=width,
                 height=height,
                 data=data,
+                lv_cf=lv_cf,
                 map_name=f"{symbol}_map",
                 source_file=png_path,
             )
@@ -242,7 +335,7 @@ def main() -> int:
         total_bytes += size_bytes
         print(
             f"  - {os.path.basename(img.source_file)} -> {img.symbol} "
-            f"({img.width}x{img.height}) : {size_bytes} bytes in firmware"
+            f"({img.width}x{img.height}, {img.lv_cf}) : {size_bytes} bytes in firmware"
         )
     print(f"✓ PNG assets total: {total_bytes} bytes in firmware")
     print(f"✓ Wrote {output_h}")

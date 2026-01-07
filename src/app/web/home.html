@@ -64,9 +64,10 @@
                         </div>
 
                         <div class="form-group">
-                            <label for="macro_icon_id">Button icon ID (reserved)</label>
-                            <input type="text" id="macro_icon_id" name="macro_icon_id" maxlength="31" placeholder="e.g., mic_off">
-                            <small>Icons are post-MVP. You can pre-fill stable IDs now.</small>
+                            <label for="macro_icon_id">Button icon</label>
+                            <input type="text" id="macro_icon_id" name="macro_icon_id" maxlength="31" placeholder="e.g., mic_off" list="macro_icon_id_list" autocomplete="off">
+                            <datalist id="macro_icon_id_list"></datalist>
+                            <small>Start typing to see available icons (auto-populated from the firmware’s compiled icon registry).</small>
                         </div>
                     </div>
                 </div>

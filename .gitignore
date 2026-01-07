@@ -8,6 +8,12 @@ site/
 # Generated LVGL PNG assets
 src/app/png_assets.cpp
 src/app/png_assets.h
+src/app/icon_assets_mono.cpp
+src/app/icon_assets_mono.h
+src/app/icon_assets_color.cpp
+src/app/icon_assets_color.h
+src/app/icon_registry.cpp
+src/app/icon_registry.h
 
 # Auto-generated web assets
 src/app/web_assets.h

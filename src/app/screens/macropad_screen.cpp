@@ -9,6 +9,14 @@
 #include "../config_manager.h"
 
 #if HAS_DISPLAY
+#include "../png_assets.h"
+#endif
+
+#if HAS_DISPLAY && HAS_ICONS
+#include "../icon_registry.h"
+#endif
+
+#if HAS_DISPLAY
 #include "../screen_saver_manager.h"
 #endif
 
@@ -46,6 +54,154 @@ static void defaultLabel(char* out, size_t outLen, uint8_t screenIndex, uint8_t 
     snprintf(out, outLen, "S%u-B%u", (unsigned)(screenIndex + 1), (unsigned)(buttonIndex + 1));
 }
 
+#if HAS_DISPLAY && HAS_ICONS
+static int clampInt(int v, int lo, int hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+struct Mask2xCacheEntry {
+    const lv_img_dsc_t* src64;
+    lv_img_dsc_t dsc128;
+    uint8_t* data128;
+    uint32_t lastUseTick;
+};
+
+static Mask2xCacheEntry s_mask2xCache[4] = {};
+
+static const lv_img_dsc_t* findCachedMask2x(const lv_img_dsc_t* src64) {
+    if (!src64) return nullptr;
+    for (size_t i = 0; i < (sizeof(s_mask2xCache) / sizeof(s_mask2xCache[0])); i++) {
+        if (s_mask2xCache[i].src64 == src64 && s_mask2xCache[i].data128) {
+            return &s_mask2xCache[i].dsc128;
+        }
+    }
+    return nullptr;
+}
+
+static const lv_img_dsc_t* findOriginalFromMaybeMask2x(const lv_img_dsc_t* srcMaybe2x) {
+    if (!srcMaybe2x) return nullptr;
+    for (size_t i = 0; i < (sizeof(s_mask2xCache) / sizeof(s_mask2xCache[0])); i++) {
+        if (&s_mask2xCache[i].dsc128 == srcMaybe2x && s_mask2xCache[i].src64) {
+            return s_mask2xCache[i].src64;
+        }
+    }
+    return nullptr;
+}
+
+static const lv_img_dsc_t* getOrCreateMask2x(const lv_img_dsc_t* src64) {
+    if (!src64) return nullptr;
+    if (src64->header.cf != LV_IMG_CF_ALPHA_8BIT) return nullptr;
+    if (src64->header.w == 0 || src64->header.h == 0) return nullptr;
+
+    if (const lv_img_dsc_t* cached = findCachedMask2x(src64)) {
+        // Touch LRU.
+        for (size_t i = 0; i < (sizeof(s_mask2xCache) / sizeof(s_mask2xCache[0])); i++) {
+            if (s_mask2xCache[i].src64 == src64) {
+                s_mask2xCache[i].lastUseTick = lv_tick_get();
+                break;
+            }
+        }
+        return cached;
+    }
+
+    // Pick an empty slot, otherwise evict the least recently used.
+    size_t slot = 0;
+    bool foundEmpty = false;
+    uint32_t oldest = 0xFFFFFFFFu;
+    for (size_t i = 0; i < (sizeof(s_mask2xCache) / sizeof(s_mask2xCache[0])); i++) {
+        if (!s_mask2xCache[i].data128) {
+            slot = i;
+            foundEmpty = true;
+            break;
+        }
+        if (s_mask2xCache[i].lastUseTick < oldest) {
+            oldest = s_mask2xCache[i].lastUseTick;
+            slot = i;
+        }
+    }
+
+    // (We intentionally don't free evicted buffers to avoid heap fragmentation.
+    //  Cache size is tiny and bounded.)
+    if (!foundEmpty) {
+        s_mask2xCache[slot].src64 = nullptr;
+        s_mask2xCache[slot].data128 = nullptr;
+        s_mask2xCache[slot].lastUseTick = 0;
+        memset(&s_mask2xCache[slot].dsc128, 0, sizeof(s_mask2xCache[slot].dsc128));
+    }
+
+    const uint16_t srcW = src64->header.w;
+    const uint16_t srcH = src64->header.h;
+    const uint16_t dstW = (uint16_t)(srcW * 2);
+    const uint16_t dstH = (uint16_t)(srcH * 2);
+    const size_t dstSize = (size_t)dstW * (size_t)dstH;
+    const size_t srcStride = (size_t)srcW;
+    const size_t dstStride = (size_t)dstW;
+
+    uint8_t* dst = (uint8_t*)lv_mem_alloc(dstSize);
+    if (!dst) return nullptr;
+
+    const uint8_t* src = (const uint8_t*)src64->data;
+    for (uint16_t y = 0; y < srcH; y++) {
+        for (uint16_t x = 0; x < srcW; x++) {
+            const uint8_t a = src[(size_t)y * srcStride + x];
+            const size_t dy0 = (size_t)(y * 2) * dstStride;
+            const size_t dy1 = (size_t)(y * 2 + 1) * dstStride;
+            const size_t dx = (size_t)(x * 2);
+            dst[dy0 + dx] = a;
+            dst[dy0 + dx + 1] = a;
+            dst[dy1 + dx] = a;
+            dst[dy1 + dx + 1] = a;
+        }
+    }
+
+    Mask2xCacheEntry* e = &s_mask2xCache[slot];
+    e->src64 = src64;
+    e->data128 = dst;
+    e->lastUseTick = lv_tick_get();
+
+    e->dsc128.header.cf = LV_IMG_CF_ALPHA_8BIT;
+    e->dsc128.header.always_zero = 0;
+    e->dsc128.header.reserved = 0;
+    e->dsc128.header.w = dstW;
+    e->dsc128.header.h = dstH;
+    e->dsc128.data_size = (uint32_t)dstSize;
+    e->dsc128.data = dst;
+
+    return &e->dsc128;
+}
+
+static bool normalizeIconId(const char* in, char* out, size_t outLen) {
+    if (!out || outLen == 0) return false;
+    out[0] = '\0';
+    if (!in) return false;
+
+    // Trim leading whitespace.
+    while (*in == ' ' || *in == '\t' || *in == '\r' || *in == '\n') {
+        in++;
+    }
+
+    // Copy, normalize, and track the last non-space.
+    size_t w = 0;
+    size_t lastNonSpace = 0;
+    for (; *in && w + 1 < outLen; in++) {
+        char c = *in;
+        if (c == '-') c = '_';
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+
+        // Keep other characters; registry lookup will just fail if invalid.
+        out[w++] = c;
+        if (!(c == ' ' || c == '\t' || c == '\r' || c == '\n')) {
+            lastNonSpace = w;
+        }
+    }
+    out[lastNonSpace] = '\0';
+
+    return out[0] != '\0';
+}
+#endif
+
 } // namespace
 
 MacroPadScreen::MacroPadScreen(DisplayManager* manager, uint8_t idx)
@@ -62,6 +218,7 @@ void MacroPadScreen::configure(DisplayManager* manager, uint8_t idx) {
     for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         buttons[i] = nullptr;
         labels[i] = nullptr;
+        icons[i] = nullptr;
         buttonCtx[i] = {this, (uint8_t)i};
     }
 
@@ -94,6 +251,8 @@ void MacroPadScreen::create() {
     // (Avoid lv_btn_create so this works even when LV_USE_BTN=0.)
     for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         lv_obj_t* btn = lv_obj_create(screen);
+        // These are static touch targets, not scrollable containers.
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_radius(btn, 10, 0);
         lv_obj_set_style_bg_color(btn, lv_color_make(30, 30, 30), 0);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
@@ -107,6 +266,26 @@ void MacroPadScreen::create() {
 
         lv_obj_add_event_cb(btn, buttonEventCallback, LV_EVENT_CLICKED, &buttonCtx[i]);
 
+        // Optional icon child (hidden by default; enabled when HAS_ICONS).
+        // Keep it present so icon work is additive.
+        lv_obj_t* icon = nullptr;
+        #if HAS_DISPLAY && HAS_ICONS
+        icon = lv_img_create(btn);
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);
+        // Image objects should never be scrollable containers.
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_SCROLLABLE);
+        // Some themes/style cascades can apply LV_STYLE_OPA to children.
+        // Force the object itself to be opaque so the image can render.
+        lv_obj_set_style_opa(icon, LV_OPA_COVER, 0);
+        // Alpha-only images (LV_IMG_CF_ALPHA_*) are tinted via style.img_recolor, but
+        // they still respect style.img_opa. Force to opaque so theme defaults can't
+        // accidentally hide icons.
+        lv_obj_set_style_img_opa(icon, LV_OPA_COVER, 0);
+        // Default to no recolor unless this is a mask icon.
+        lv_obj_set_style_img_recolor_opa(icon, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(icon, LV_OBJ_FLAG_CLICKABLE);
+        #endif
+
         lv_obj_t* lbl = lv_label_create(btn);
         lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
@@ -116,6 +295,7 @@ void MacroPadScreen::create() {
 
         buttons[i] = btn;
         labels[i] = lbl;
+        icons[i] = icon;
     }
 
     // Empty-state helper (shown only on Macro Screen 1 when no macros are configured).
@@ -143,6 +323,7 @@ void MacroPadScreen::destroy() {
     for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         buttons[i] = nullptr;
         labels[i] = nullptr;
+        icons[i] = nullptr;
     }
 
     emptyStateLabel = nullptr;
@@ -281,6 +462,130 @@ void MacroPadScreen::layoutButtonsWideCenter() {
             lv_obj_center(labels[2]);
         }
     }
+}
+
+void MacroPadScreen::updateButtonLayout(uint8_t index, bool hasIcon, bool hasLabel) {
+    if (index >= MACROS_BUTTONS_PER_SCREEN) return;
+    lv_obj_t* btn = buttons[index];
+    lv_obj_t* lbl = labels[index];
+    lv_obj_t* icon = icons[index];
+    if (!btn || !lbl) return;
+
+    // Default: centered label.
+    if (!hasIcon || !icon) {
+        lv_obj_center(lbl);
+        return;
+    }
+
+    // With icon: place label directly under the icon so they read as a unit.
+    // Use small padding so it looks good across different templates.
+    const int w = (int)lv_obj_get_width(btn);
+    const int h = (int)lv_obj_get_height(btn);
+
+    const int pad = clampInt((w + h) / 2 / 20, 4, 10);
+
+    // Icon target box. Master icon size is 64px.
+    // For tall/narrow buttons, basing on minDim makes icons too small; prefer width.
+    const bool tallNarrow = (h > (w * 2));
+    const int baseDim = tallNarrow ? w : ((w < h) ? w : h);
+
+    int iconBox = 0;
+    if (!hasLabel) {
+        // Icon-only: make it prominent.
+        iconBox = (int)lroundf((float)baseDim * 0.75f);
+        iconBox = clampInt(iconBox, 32, 128);
+    } else {
+        // Icon + label: still keep it reasonably large.
+        iconBox = (int)lroundf((float)baseDim * 0.85f);
+        iconBox = clampInt(iconBox, 28, 128);
+    }
+
+    // Special-case very tall/narrow buttons (like the side rails in wide_sides_3):
+    // when the button width is 64px, scaling a 64px source down can make thin
+    // icons nearly disappear. Prefer 1:1 scale *when it fits*.
+    if (tallNarrow && w >= 64) {
+        iconBox = 64;
+    }
+
+    // Scale icon via zoom so a single 64x64 source works on different button sizes.
+    // LVGL zoom: 256 = 1.0x
+    #if HAS_DISPLAY && HAS_ICONS
+    bool canTransform = true;
+    const void* src = lv_img_get_src(icon);
+    if (src && lv_img_src_get_type(src) == LV_IMG_SRC_VARIABLE) {
+        const lv_img_dsc_t* dsc = (const lv_img_dsc_t*)src;
+        switch (dsc->header.cf) {
+            case LV_IMG_CF_ALPHA_1BIT:
+            case LV_IMG_CF_ALPHA_2BIT:
+            case LV_IMG_CF_ALPHA_4BIT:
+            case LV_IMG_CF_ALPHA_8BIT:
+                // LVGL v8 image widget transformations (zoom/rotate) require true-color images.
+                // Alpha-only images can't be transformed, and will render blank when zoom != 256.
+                canTransform = false;
+                break;
+            default:
+                break;
+        }
+    }
+
+    // Fixed-step enlargement rule:
+    // - Allow arbitrary DOWNscaling (<1x) to make icons fit.
+    // - For enlargement (>1x), snap to exactly 2x (512) and only when the layout has
+    //   already decided iconBox can hit its max (128).
+    const bool wants2x = (iconBox >= 128);
+
+    if (canTransform) {
+        uint16_t zoom = (uint16_t)clampInt((int)lroundf(256.0f * ((float)iconBox / 64.0f)), 64, 256);
+        if (wants2x) zoom = 512;
+        lv_img_set_zoom(icon, zoom);
+        // Ensure the scaled image has enough object area to render without clipping.
+        if (wants2x) {
+            lv_obj_set_size(icon, 128, 128);
+        } else {
+            lv_obj_set_size(icon, iconBox, iconBox);
+        }
+    } else {
+        // Alpha-only masks can't be zoomed by lv_img_set_zoom.
+        // Instead, when we want a 2x icon, generate a cached 2x alpha mask in RAM.
+        if (src && lv_img_src_get_type(src) == LV_IMG_SRC_VARIABLE) {
+            const lv_img_dsc_t* dsc = (const lv_img_dsc_t*)src;
+            if (wants2x) {
+                // If currently on the original 64x64 mask, swap to 128x128 cached mask.
+                if (dsc->header.cf == LV_IMG_CF_ALPHA_8BIT && dsc->header.w <= 64 && dsc->header.h <= 64) {
+                    const lv_img_dsc_t* dsc2x = getOrCreateMask2x(dsc);
+                    if (dsc2x) {
+                        lv_img_set_src(icon, dsc2x);
+                    }
+                }
+            } else {
+                // If currently using a cached 2x mask, revert to the original 64x64 source.
+                if (const lv_img_dsc_t* orig = findOriginalFromMaybeMask2x(dsc)) {
+                    lv_img_set_src(icon, orig);
+                }
+            }
+        }
+
+        lv_img_set_zoom(icon, 256);
+        lv_obj_set_size(icon, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    }
+    #endif
+
+    if (!hasLabel) {
+        // Icon-only: center.
+        lv_obj_center(icon);
+        lv_label_set_text(lbl, "");
+        lv_obj_center(lbl);
+        return;
+    }
+
+    // Center the icon+label group.
+    const int gap = clampInt(pad / 2, 2, 8);
+    lv_obj_update_layout(lbl);
+    const int lblH = (int)lv_obj_get_height(lbl);
+    const int iconYOffset = -((lblH / 2) + (gap / 2));
+
+    lv_obj_align(icon, LV_ALIGN_CENTER, 0, iconYOffset);
+    lv_obj_align_to(lbl, icon, LV_ALIGN_OUT_BOTTOM_MID, 0, gap);
 }
 
 void MacroPadScreen::layoutButtonsFourSplit() {
@@ -462,7 +767,6 @@ void MacroPadScreen::layoutButtonsFiveStack() {
     // It's OK if elements fall outside the visible round area.
     const int padX = (w + h) / 2 / 24; // ~15px at 360
     // Use one spacing value for both axes so vertical gaps match horizontal gaps.
-    // Keep it relatively small; we'll refine visually later.
     const int spacing = (padX >= 9) ? (padX / 3) : 3; // ~5px at 360
 
     // Touch targets. Side buttons must touch the screen edges.
@@ -591,23 +895,87 @@ void MacroPadScreen::refreshButtons(bool force) {
 
         const bool visible = btnCfg->action != MacroButtonAction::None;
         setButtonVisible(buttons[i], visible);
+
+        // For navigation buttons, provide sensible default icons if none configured.
+        // This avoids “blank” side buttons on templates like round_wide_sides_3.
+        const char* effectiveIconId = btnCfg->icon_id;
+        if (effectiveIconId[0] == '\0') {
+            if (btnCfg->action == MacroButtonAction::NavPrevScreen) effectiveIconId = "chevron_left";
+            else if (btnCfg->action == MacroButtonAction::NavNextScreen) effectiveIconId = "chevron_right";
+        }
+
         if (!visible) continue;
+
+        // If an icon is set and the user intentionally left the label blank,
+        // respect that (icon-only button) instead of forcing a default label.
+        const bool userLabelEmpty = (btnCfg->label[0] == '\0');
+        const bool wantsIcon = (effectiveIconId && effectiveIconId[0] != '\0');
+
+        // If this is a navigation button and the label is a simple arrow, prefer icon-only
+        // ONLY when the user explicitly configured an icon.
+        // If the icon comes from a fallback (icon_id empty), keep the label so the button
+        // doesn't become blank on targets where icons are hard to see.
+        const bool labelIsSimpleArrow = (btnCfg->icon_id[0] != '\0') && (
+            (btnCfg->label[0] == '<' && btnCfg->label[1] == '\0')
+            || (btnCfg->label[0] == '>' && btnCfg->label[1] == '\0'));
 
         char labelBuf[32];
         const char* labelText = btnCfg->label;
-        if (!labelText || !*labelText) {
+        if ((userLabelEmpty || labelIsSimpleArrow) && wantsIcon) {
+            labelText = "";
+        } else if (!labelText || !*labelText) {
             defaultLabel(labelBuf, sizeof(labelBuf), screenIndex, (uint8_t)i);
             labelText = labelBuf;
         }
 
         // If action isn't SendKeys, show a small hint so blank labels are still meaningful.
-        if ((btnCfg->label == nullptr || btnCfg->label[0] == '\0') && btnCfg->action != MacroButtonAction::SendKeys) {
+        // For icon-only buttons, do not inject a hint.
+        if (!wantsIcon && (btnCfg->label == nullptr || btnCfg->label[0] == '\0') && btnCfg->action != MacroButtonAction::SendKeys) {
             char combined[40];
             snprintf(combined, sizeof(combined), "%s\n(%s)", labelText, actionToShortLabel(btnCfg->action));
             lv_label_set_text(labels[i], combined);
         } else {
             lv_label_set_text(labels[i], labelText);
         }
+
+        // Icon rendering (optional).
+        bool hasIcon = false;
+        #if HAS_DISPLAY && HAS_ICONS
+        if (icons[i]) {
+            IconRef ref;
+            char normalizedId[MACROS_ICON_ID_MAX_LEN];
+            const char* lookupId = effectiveIconId;
+            if (lookupId && lookupId[0] != '\0' && normalizeIconId(lookupId, normalizedId, sizeof(normalizedId))) {
+                lookupId = normalizedId;
+            }
+
+            if (lookupId[0] != '\0' && icon_registry_lookup(lookupId, &ref) && ref.dsc) {
+                lv_img_set_src(icons[i], ref.dsc);
+                lv_obj_set_style_opa(icons[i], LV_OPA_COVER, 0);
+                if (ref.kind == IconKind::Mask) {
+                    // Monochrome: recolor/tint via style.
+                    lv_obj_set_style_img_recolor(icons[i], lv_color_white(), 0);
+                    lv_obj_set_style_img_recolor_opa(icons[i], LV_OPA_COVER, 0);
+                    lv_obj_set_style_img_opa(icons[i], LV_OPA_COVER, 0);
+                } else {
+                    // Color: do not recolor.
+                    lv_obj_set_style_img_recolor_opa(icons[i], LV_OPA_TRANSP, 0);
+                    lv_obj_set_style_img_opa(icons[i], LV_OPA_COVER, 0);
+                }
+
+                lv_obj_clear_flag(icons[i], LV_OBJ_FLAG_HIDDEN);
+                // Ensure the icon isn't occluded by the label in narrow layouts.
+                lv_obj_move_foreground(icons[i]);
+                hasIcon = true;
+            } else {
+                lv_obj_add_flag(icons[i], LV_OBJ_FLAG_HIDDEN);
+                hasIcon = false;
+            }
+        }
+        #endif
+
+        const bool hasLabel = (labelText && *labelText);
+        updateButtonLayout((uint8_t)i, hasIcon, hasLabel);
     }
 
     updateEmptyState(anyButtonConfigured);

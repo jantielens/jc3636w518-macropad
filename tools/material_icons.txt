@@ -1,0 +1,123 @@
+# Google Material icons (rounded, filled) starter set (~100)
+# One icon name per line. Used with:
+#   python3 tools/fetch_material_symbols.py --names-file tools/material_icons.txt
+
+# Media / playback
+play_arrow
+pause
+stop
+skip_next
+skip_previous
+fast_forward
+fast_rewind
+shuffle
+repeat
+repeat_one
+volume_up
+volume_down
+volume_off
+volume_mute
+mic
+mic_off
+headphones
+headset
+music_note
+queue_music
+library_music
+videocam
+videocam_off
+photo_camera
+camera_front
+camera
+camera_alt
+image
+
+# System controls
+settings
+tune
+menu
+more_vert
+more_horiz
+search
+close
+check
+add
+remove
+edit
+delete
+save
+refresh
+undo
+redo
+clear
+
+# Navigation / arrows
+arrow_upward
+arrow_downward
+arrow_back
+arrow_forward
+chevron_left
+chevron_right
+expand_more
+expand_less
+home
+apps
+
+# Connectivity
+wifi
+wifi_off
+bluetooth
+bluetooth_disabled
+usb
+airplanemode_active
+airplanemode_inactive
+
+# Status / indicators
+power_settings_new
+power
+battery_full
+battery_charging_full
+battery_alert
+battery_unknown
+wb_sunny
+nights_stay
+brightness_5
+brightness_7
+nightlight
+notifications_active
+notifications_off
+warning
+error
+info
+help
+
+# Devices / misc
+keyboard
+keyboard_alt
+mouse
+smartphone
+laptop
+folder
+folder_open
+cloud
+
+# Time
+schedule
+timer
+timer_off
+alarm
+alarm_off
+
+# Communication
+call
+call_end
+chat
+send
+
+# Extras commonly useful on macropads
+lock
+lock_open
+visibility
+visibility_off
+verified_user
+security

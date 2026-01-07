@@ -37,6 +37,48 @@ board_has_display() {
     return 1
 }
 
+board_has_icons() {
+    local board_name="$1"
+    local overrides_file="$SCRIPT_DIR/src/boards/$board_name/board_overrides.h"
+
+    # Default config has HAS_ICONS=false; require explicit override.
+    if [[ ! -f "$overrides_file" ]]; then
+        return 1
+    fi
+
+    # Match: #define HAS_ICONS true (allow whitespace)
+    if grep -qE '^[[:space:]]*#define[[:space:]]+HAS_ICONS[[:space:]]+true[[:space:]]*$' "$overrides_file"; then
+        return 0
+    fi
+
+    return 1
+}
+
+should_generate_icon_assets() {
+    local target_board="$1"
+
+    # Require icon asset folders to exist. (They may be empty; we still generate
+    # empty/stable output files so includes remain predictable.)
+    if [[ ! -d "$SCRIPT_DIR/assets/icons_mono" && ! -d "$SCRIPT_DIR/assets/icons_color" ]]; then
+        return 1
+    fi
+
+    if [[ -n "$target_board" ]]; then
+        board_has_display "$target_board" || return 1
+        board_has_icons "$target_board"
+        return $?
+    fi
+
+    # Building all boards: generate if ANY configured board has icons + display.
+    for board_name in "${!FQBN_TARGETS[@]}"; do
+        if board_has_display "$board_name" && board_has_icons "$board_name"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 should_generate_png_assets() {
     local target_board="$1"
 
@@ -194,6 +236,41 @@ if should_generate_png_assets "$TARGET_BOARD"; then
     echo ""
 else
     echo "Skipping PNG asset generation (no display build or no PNGs)."
+    echo ""
+fi
+
+# Generate LVGL icon assets + registry (only when building for a board with HAS_ICONS=true)
+if should_generate_icon_assets "$TARGET_BOARD"; then
+    echo "Generating LVGL icon assets from assets/icons_*..."
+
+    # Always generate stable output files so includes remain predictable.
+    python3 "$SCRIPT_DIR/tools/png2lvgl_assets.py" \
+        "$SCRIPT_DIR/assets/icons_mono" \
+        "$SCRIPT_DIR/src/app/icon_assets_mono.cpp" \
+        "$SCRIPT_DIR/src/app/icon_assets_mono.h" \
+        --prefix "ic_" \
+        --format "alpha_8bit" \
+        --size 64 \
+        --resize
+
+    python3 "$SCRIPT_DIR/tools/png2lvgl_assets.py" \
+        "$SCRIPT_DIR/assets/icons_color" \
+        "$SCRIPT_DIR/src/app/icon_assets_color.cpp" \
+        "$SCRIPT_DIR/src/app/icon_assets_color.h" \
+        --prefix "ic_" \
+        --format "true_color_alpha" \
+        --size 64 \
+        --resize
+
+    python3 "$SCRIPT_DIR/tools/generate_icon_registry.py" \
+        --mono-h "$SCRIPT_DIR/src/app/icon_assets_mono.h" \
+        --color-h "$SCRIPT_DIR/src/app/icon_assets_color.h" \
+        --out-h "$SCRIPT_DIR/src/app/icon_registry.h" \
+        --out-cpp "$SCRIPT_DIR/src/app/icon_registry.cpp"
+
+    echo ""
+else
+    echo "Skipping icon asset generation (no icon-enabled build)."
     echo ""
 fi
 

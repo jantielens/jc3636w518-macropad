@@ -142,9 +142,11 @@
 #define LV_USE_CHECKBOX   0
 #define LV_USE_DROPDOWN   0
 
-// Image widget support is only needed for the Image API's optional LVGL image screen.
+// Image widget support is needed for either:
+// - Image API's optional LVGL image screen (HAS_IMAGE_API)
+// - Macro button icons (HAS_ICONS)
 // Keep it disabled by default to reduce flash size in template builds.
-#if HAS_IMAGE_API
+#if HAS_IMAGE_API || HAS_ICONS
   #ifndef LV_USE_IMG
     #define LV_USE_IMG        1
   #endif

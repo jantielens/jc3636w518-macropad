@@ -22,6 +22,10 @@
 #include "github_release_config.h"
 #include "../version.h"
 
+#if HAS_DISPLAY && HAS_ICONS
+#include "icon_registry.h"
+#endif
+
 #if HAS_DISPLAY
 #include "display_manager.h"
 #include "screen_saver_manager.h"
@@ -70,6 +74,8 @@ void handlePostDisplayActivity(AsyncWebServerRequest *request);
 
 void handleGetMacros(AsyncWebServerRequest *request);
 void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+
+void handleGetIcons(AsyncWebServerRequest *request);
 
 void handleGetFirmwareLatest(AsyncWebServerRequest *request);
 void handlePostFirmwareUpdate(AsyncWebServerRequest *request);
@@ -261,6 +267,35 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
         response->print("]}");
     }
+
+    response->print("]}");
+    request->send(response);
+}
+
+// GET /api/icons
+// Returns the compiled icon IDs so the portal can offer an autocomplete list.
+void handleGetIcons(AsyncWebServerRequest *request) {
+    if (!portal_auth_gate(request)) return;
+
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    response->print("{\"icons\":[");
+
+    #if HAS_DISPLAY && HAS_ICONS
+    const size_t n = icon_registry_count();
+    for (size_t i = 0; i < n; i++) {
+        if (i > 0) response->print(",");
+
+        const char* id = icon_registry_id_at(i);
+        const IconKind kind = icon_registry_kind_at(i);
+
+        // icon_id is expected to be a safe identifier ([a-z0-9_]+), so we don't do JSON escaping here.
+        response->print("{\"id\":\"");
+        response->print(id ? id : "");
+        response->print("\",\"kind\":\"");
+        response->print(kind == IconKind::Color ? "color" : "mask");
+        response->print("\"}");
+    }
+    #endif
 
     response->print("]}");
     request->send(response);
@@ -1766,6 +1801,9 @@ void web_portal_init(DeviceConfig *config) {
     // API endpoints
     server->on("/api/mode", HTTP_GET, handleGetMode);
     server->on("/api/config", HTTP_GET, handleGetConfig);
+
+    // Icons API (for macro icon selector)
+    server->on("/api/icons", HTTP_GET, handleGetIcons);
 
     // Macros API
     server->on("/api/macros", HTTP_GET, handleGetMacros);

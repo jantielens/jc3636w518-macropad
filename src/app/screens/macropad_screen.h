@@ -36,6 +36,7 @@ private:
     lv_obj_t* screen;
     lv_obj_t* buttons[MACROS_BUTTONS_PER_SCREEN];
     lv_obj_t* labels[MACROS_BUTTONS_PER_SCREEN];
+    lv_obj_t* icons[MACROS_BUTTONS_PER_SCREEN];
     lv_obj_t* emptyStateLabel;
     ButtonCtx buttonCtx[MACROS_BUTTONS_PER_SCREEN];
 
@@ -50,6 +51,8 @@ private:
     void layoutButtonsFourSplit();
     bool isSlotUsedByTemplate(uint8_t slot) const;
     void refreshButtons(bool force);
+
+    void updateButtonLayout(uint8_t index, bool hasIcon, bool hasLabel);
 
     void updateEmptyState(bool anyButtonConfigured);
 

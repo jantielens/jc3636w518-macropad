@@ -27,6 +27,9 @@
 // Enable Image API on this board.
 #define HAS_IMAGE_API true
 
+// Enable macro button icons on this board.
+#define HAS_ICONS true
+
 // ---------------------------------------------------------------------------
 // Networking / AsyncTCP
 // ---------------------------------------------------------------------------
