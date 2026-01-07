@@ -30,6 +30,7 @@
 namespace {
 
 constexpr uint32_t kUiRefreshIntervalMs = 500;
+constexpr lv_state_t kPressCueState = LV_STATE_USER_1;
 
 static void setButtonVisible(lv_obj_t* btn, bool visible) {
     if (!btn) return;
@@ -53,6 +54,29 @@ static const char* actionToShortLabel(MacroButtonAction a) {
 static void defaultLabel(char* out, size_t outLen, uint8_t screenIndex, uint8_t buttonIndex) {
     // screenIndex/buttonIndex are 0-based
     snprintf(out, outLen, "S%u-B%u", (unsigned)(screenIndex + 1), (unsigned)(buttonIndex + 1));
+}
+
+static inline uint8_t rgb565_luma(lv_color_t c) {
+    // LV_COLOR_DEPTH is 16 (RGB565) in this project.
+    const uint16_t v = c.full;
+    const uint8_t r5 = (v >> 11) & 0x1F;
+    const uint8_t g6 = (v >> 5) & 0x3F;
+    const uint8_t b5 = (v >> 0) & 0x1F;
+
+    const uint8_t r8 = (uint8_t)((r5 * 255u) / 31u);
+    const uint8_t g8 = (uint8_t)((g6 * 255u) / 63u);
+    const uint8_t b8 = (uint8_t)((b5 * 255u) / 31u);
+
+    // ITU-R BT.601-ish luma approximation.
+    return (uint8_t)((uint16_t)(r8 * 77u + g8 * 150u + b8 * 29u) >> 8);
+}
+
+static inline lv_color_t flashColorFor(lv_color_t base) {
+    // Luminance-aware: brighten dark colors, darken bright colors.
+    const uint8_t luma = rgb565_luma(base);
+    const lv_color_t target = (luma >= 160) ? lv_color_black() : lv_color_white();
+    // lv_color_mix(c1, c2, mix): mix=0 => c2, mix=255 => c1
+    return lv_color_mix(target, base, 80);
 }
 
 #if HAS_DISPLAY && HAS_ICONS
@@ -206,7 +230,7 @@ static bool normalizeIconId(const char* in, char* out, size_t outLen) {
 } // namespace
 
 MacroPadScreen::MacroPadScreen(DisplayManager* manager, uint8_t idx)
-    : displayMgr(manager), screenIndex(idx), screen(nullptr), lastUpdateMs(0) {
+    : displayMgr(manager), screenIndex(idx), screen(nullptr), pressedPieSlot(-1), pressHoldTimer(nullptr), lastUpdateMs(0) {
     configure(manager, idx);
 }
 
@@ -229,6 +253,14 @@ void MacroPadScreen::configure(DisplayManager* manager, uint8_t idx) {
     }
 
     emptyStateLabel = nullptr;
+
+    pressedPieSlot = -1;
+
+    pressHoldTimer = nullptr;
+    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        pressDownTick[i] = 0;
+        pendingClearTick[i] = 0;
+    }
 
     lastUpdateMs = 0;
 }
@@ -255,6 +287,43 @@ const char* MacroPadScreen::resolveTemplateId(const MacroConfig* cfg) const {
     return tpl;
 }
 
+void MacroPadScreen::ensurePressStylesInited() {
+    if (pressStyles.inited) return;
+
+    static const lv_style_prop_t btnProps[] = {
+        (lv_style_prop_t)LV_STYLE_BG_COLOR,
+        (lv_style_prop_t)LV_STYLE_BG_OPA,
+        (lv_style_prop_t)LV_STYLE_PROP_INV,
+    };
+    lv_style_transition_dsc_init(&pressStyles.btnTrans, btnProps, lv_anim_path_ease_out, 160, 0, nullptr);
+
+    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        lv_style_init(&pressStyles.btnBase[i]);
+        lv_style_set_bg_opa(&pressStyles.btnBase[i], LV_OPA_COVER);
+        lv_style_set_bg_color(&pressStyles.btnBase[i], lv_color_make(30, 30, 30));
+        lv_style_set_transition(&pressStyles.btnBase[i], &pressStyles.btnTrans);
+
+        lv_style_init(&pressStyles.btnPressed[i]);
+        lv_style_set_bg_opa(&pressStyles.btnPressed[i], LV_OPA_COVER);
+        lv_style_set_bg_color(&pressStyles.btnPressed[i], flashColorFor(lv_color_make(30, 30, 30)));
+    }
+
+    for (int i = 0; i < 8; i++) {
+        lv_style_init(&pressStyles.segBase[i]);
+        lv_style_set_arc_opa(&pressStyles.segBase[i], LV_OPA_COVER);
+        lv_style_set_arc_color(&pressStyles.segBase[i], lv_color_make(30, 30, 30));
+        // NOTE: We intentionally do NOT animate arc color/opacity transitions.
+        // On some targets the arc (indicator) transition can produce visible color
+        // artifacts during redraw (reported as “yellow flicker” on red wedges).
+
+        lv_style_init(&pressStyles.segPressed[i]);
+        lv_style_set_arc_opa(&pressStyles.segPressed[i], LV_OPA_COVER);
+        lv_style_set_arc_color(&pressStyles.segPressed[i], flashColorFor(lv_color_make(30, 30, 30)));
+    }
+
+    pressStyles.inited = true;
+}
+
 void MacroPadScreen::buildLayoutContext(macropad_layout::MacroPadLayoutContext& out) {
     out = {
         .displayMgr = displayMgr,
@@ -270,6 +339,8 @@ void MacroPadScreen::buildLayoutContext(macropad_layout::MacroPadLayoutContext& 
 void MacroPadScreen::create() {
     if (screen) return;
 
+    ensurePressStylesInited();
+
     screen = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
     // The screen root is just a container for our custom hit targets.
@@ -284,8 +355,11 @@ void MacroPadScreen::create() {
         // These are static touch targets, not scrollable containers.
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_style_radius(btn, 10, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_make(30, 30, 30), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+
+        // Base + pressed styles (pressed uses a luminance-aware flash fill).
+        lv_obj_add_style(btn, &pressStyles.btnBase[i], LV_PART_MAIN);
+        lv_obj_add_style(btn, &pressStyles.btnPressed[i], LV_PART_MAIN | kPressCueState);
+
         // No outline/border by default.
         lv_obj_set_style_border_width(btn, 0, 0);
         lv_obj_set_style_outline_width(btn, 0, 0);
@@ -294,6 +368,10 @@ void MacroPadScreen::create() {
         lv_obj_set_style_pad_all(btn, 0, 0);
         lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
 
+        // Drive pressed visual feedback explicitly (kPressCueState).
+        lv_obj_add_event_cb(btn, buttonEventCallback, LV_EVENT_PRESSED, &buttonCtx[i]);
+        lv_obj_add_event_cb(btn, buttonEventCallback, LV_EVENT_RELEASED, &buttonCtx[i]);
+        lv_obj_add_event_cb(btn, buttonEventCallback, LV_EVENT_PRESS_LOST, &buttonCtx[i]);
         lv_obj_add_event_cb(btn, buttonEventCallback, LV_EVENT_CLICKED, &buttonCtx[i]);
 
         // Optional icon child (hidden by default; enabled when HAS_ICONS).
@@ -338,6 +416,10 @@ void MacroPadScreen::create() {
     lv_obj_set_style_outline_width(pieHitLayer, 0, 0);
     lv_obj_set_style_pad_all(pieHitLayer, 0, 0);
     lv_obj_add_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(pieHitLayer, pieEventCallback, LV_EVENT_PRESSED, this);
+    lv_obj_add_event_cb(pieHitLayer, pieEventCallback, LV_EVENT_PRESSING, this);
+    lv_obj_add_event_cb(pieHitLayer, pieEventCallback, LV_EVENT_RELEASED, this);
+    lv_obj_add_event_cb(pieHitLayer, pieEventCallback, LV_EVENT_PRESS_LOST, this);
     lv_obj_add_event_cb(pieHitLayer, pieEventCallback, LV_EVENT_CLICKED, this);
 
     for (int i = 0; i < 8; i++) {
@@ -358,14 +440,27 @@ void MacroPadScreen::create() {
         lv_obj_set_style_border_width(seg, 0, LV_PART_KNOB);
 
         // Default segment color; per-button colors applied in refreshButtons().
-        lv_obj_set_style_arc_color(seg, lv_color_make(30, 30, 30), LV_PART_INDICATOR);
-        lv_obj_set_style_arc_opa(seg, LV_OPA_COVER, LV_PART_INDICATOR);
+        // Base + pressed styles (pressed uses a luminance-aware flash fill).
+        lv_obj_add_style(seg, &pressStyles.segBase[i], LV_PART_INDICATOR);
+        lv_obj_add_style(seg, &pressStyles.segPressed[i], LV_PART_INDICATOR | kPressCueState);
         lv_obj_set_style_arc_rounded(seg, false, LV_PART_INDICATOR);
 
         // Disable the background arc.
         lv_obj_set_style_arc_opa(seg, LV_OPA_TRANSP, LV_PART_MAIN);
 
         pieSegments[i] = seg;
+    }
+
+    // Ensure the pie hit layer stays above any non-clickable visuals (arcs) so it
+    // consistently owns pointer events while the pie template is active.
+    if (pieHitLayer) {
+        lv_obj_move_foreground(pieHitLayer);
+    }
+
+    // Timer used to enforce a minimum visible time for pressed feedback.
+    // (Quick taps otherwise make the cue nearly invisible.)
+    if (!pressHoldTimer) {
+        pressHoldTimer = lv_timer_create(pressHoldTimerCallback, 10, this);
     }
 
     // Empty-state helper (shown only on Macro Screen 1 when no macros are configured).
@@ -390,6 +485,11 @@ void MacroPadScreen::destroy() {
         screen = nullptr;
     }
 
+    if (pressHoldTimer) {
+        lv_timer_del(pressHoldTimer);
+        pressHoldTimer = nullptr;
+    }
+
     for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         buttons[i] = nullptr;
         labels[i] = nullptr;
@@ -403,7 +503,83 @@ void MacroPadScreen::destroy() {
 
     emptyStateLabel = nullptr;
 
+    pressedPieSlot = -1;
+
+    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        pressDownTick[i] = 0;
+        pendingClearTick[i] = 0;
+    }
+
     lastUpdateMs = 0;
+}
+
+void MacroPadScreen::notePressed(uint8_t slotIndex) {
+    if (slotIndex >= MACROS_BUTTONS_PER_SCREEN) return;
+    pressDownTick[slotIndex] = lv_tick_get();
+    pendingClearTick[slotIndex] = 0;
+}
+
+void MacroPadScreen::cancelPendingClear(uint8_t slotIndex) {
+    if (slotIndex >= MACROS_BUTTONS_PER_SCREEN) return;
+    pendingClearTick[slotIndex] = 0;
+}
+
+void MacroPadScreen::clearPressedVisual(uint8_t slotIndex) {
+    if (slotIndex >= MACROS_BUTTONS_PER_SCREEN) return;
+
+    if (slotIndex < 8) {
+        // Slots 0..7 are special in the pie template (ring segments), but they are
+        // also normal buttons in non-pie templates. Clear both to be safe.
+        if (pieSegments[slotIndex]) lv_obj_clear_state(pieSegments[slotIndex], kPressCueState);
+        if (buttons[slotIndex]) lv_obj_clear_state(buttons[slotIndex], kPressCueState);
+        if (pressedPieSlot == (int8_t)slotIndex) {
+            pressedPieSlot = -1;
+        }
+        return;
+    }
+
+    // Center (8) and grid buttons (9..)
+    if (buttons[slotIndex]) {
+        lv_obj_clear_state(buttons[slotIndex], kPressCueState);
+    }
+}
+
+void MacroPadScreen::scheduleReleaseClear(uint8_t slotIndex) {
+    if (slotIndex >= MACROS_BUTTONS_PER_SCREEN) return;
+
+    const uint32_t now = lv_tick_get();
+    const uint32_t down = pressDownTick[slotIndex];
+    const uint32_t elapsed = (down == 0) ? kMinPressCueMs : lv_tick_elaps(down);
+
+    if (elapsed >= kMinPressCueMs) {
+        pendingClearTick[slotIndex] = 0;
+        clearPressedVisual(slotIndex);
+        return;
+    }
+
+    const uint32_t remaining = (kMinPressCueMs - elapsed);
+    pendingClearTick[slotIndex] = now + remaining;
+}
+
+void MacroPadScreen::pressHoldTimerCallback(lv_timer_t* t) {
+    MacroPadScreen* self = (MacroPadScreen*)t->user_data;
+    if (!self) return;
+
+    const uint32_t now = lv_tick_get();
+    bool anyPending = false;
+
+    for (uint8_t i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
+        const uint32_t due = self->pendingClearTick[i];
+        if (due == 0) continue;
+        anyPending = true;
+        if ((int32_t)(now - due) >= 0) {
+            self->pendingClearTick[i] = 0;
+            self->clearPressedVisual(i);
+        }
+    }
+
+    // Light optimization: if nothing is pending, tick slower.
+    lv_timer_set_period(t, anyPending ? 10 : 50);
 }
 
 void MacroPadScreen::show() {
@@ -442,6 +618,43 @@ void MacroPadScreen::pieEventCallback(lv_event_t* e) {
     MacroPadScreen* self = (MacroPadScreen*)lv_event_get_user_data(e);
     if (!self) return;
 
+    const lv_event_code_t code = lv_event_get_code(e);
+
+    auto clearPressed = [&]() {
+        if (self->pressedPieSlot >= 0 && self->pressedPieSlot < 8) {
+            const uint8_t s = (uint8_t)self->pressedPieSlot;
+            self->cancelPendingClear(s);
+            self->clearPressedVisual(s);
+        }
+        self->pressedPieSlot = -1;
+
+        // The pie hit layer sits above everything (including the center button), so
+        // we need to drive the center pressed state manually for consistent feedback.
+        if (self->buttons[8]) {
+            self->cancelPendingClear(8);
+            self->clearPressedVisual(8);
+        }
+    };
+
+    // Release: clear highlight (but enforce a minimum visible cue time).
+    // Note: we intentionally ignore LV_EVENT_PRESS_LOST here because, in pie mode,
+    // LVGL can transiently report press-lost while the finger is still down if the
+    // pressed object selection changes. That can cause visible flicker.
+    if (code == LV_EVENT_RELEASED) {
+        // Schedule clear for whichever target is currently pressed.
+        if (self->pressedPieSlot >= 0 && self->pressedPieSlot < 8) {
+            self->scheduleReleaseClear((uint8_t)self->pressedPieSlot);
+        }
+        if (self->buttons[8] && lv_obj_has_state(self->buttons[8], kPressCueState)) {
+            self->scheduleReleaseClear(8);
+        }
+        return;
+    }
+
+    if (code == LV_EVENT_PRESS_LOST) {
+        return;
+    }
+
     lv_indev_t* indev = lv_indev_get_act();
     if (!indev) return;
 
@@ -456,8 +669,61 @@ void MacroPadScreen::pieEventCallback(lv_event_t* e) {
     self->buildLayoutContext(ctx);
 
     const int slot = layout.slotFromPoint(p.x, p.y, ctx);
-    if (slot < 0) return;
-    self->handleButtonClick((uint8_t)slot);
+
+    // Press: latch pressed feedback to the initial target.
+    // We intentionally do NOT switch the highlighted wedge during LV_EVENT_PRESSING;
+    // that eliminates flicker caused by touch jitter (especially near wedge gaps).
+    if (code == LV_EVENT_PRESSED) {
+        clearPressed();
+
+        if (slot >= 0 && slot < 8) {
+            self->pressedPieSlot = (int8_t)slot;
+            lv_obj_t* seg = self->pieSegments[slot];
+            if (seg) lv_obj_add_state(seg, kPressCueState);
+            self->notePressed((uint8_t)slot);
+            return;
+        }
+
+        if (slot == 8) {
+            if (self->buttons[8]) lv_obj_add_state(self->buttons[8], kPressCueState);
+            self->notePressed(8);
+            return;
+        }
+
+        // slot == -1 (gap) or other invalid: no highlight.
+        return;
+    }
+
+    if (code == LV_EVENT_PRESSING) {
+        // If we didn't manage to latch on initial press (e.g., pressed in a gap),
+        // allow one-time acquisition while still pressed.
+        const bool hasWedge = (self->pressedPieSlot >= 0 && self->pressedPieSlot < 8);
+        const bool hasCenter = (self->buttons[8] && lv_obj_has_state(self->buttons[8], kPressCueState));
+        if (hasWedge || hasCenter) return;
+
+        if (slot >= 0 && slot < 8) {
+            self->pressedPieSlot = (int8_t)slot;
+            lv_obj_t* seg = self->pieSegments[slot];
+            if (seg) lv_obj_add_state(seg, kPressCueState);
+            self->notePressed((uint8_t)slot);
+            return;
+        }
+
+        if (slot == 8) {
+            if (self->buttons[8]) lv_obj_add_state(self->buttons[8], kPressCueState);
+            self->notePressed(8);
+            return;
+        }
+
+        return;
+    }
+
+    // Click: clear highlight (if any), then trigger action.
+    if (code == LV_EVENT_CLICKED) {
+        if (slot < 0) return;
+        self->handleButtonClick((uint8_t)slot);
+        return;
+    }
 }
 
 void MacroPadScreen::handleButtonClick(uint8_t b) {
@@ -636,10 +902,21 @@ void MacroPadScreen::refreshButtons(bool force) {
     const macropad_layout::IMacroPadLayout& layout = macropad_layout::layoutForId(tpl);
     const bool isPie = layout.isPie();
 
+    if (!isPie && pressedPieSlot >= 0 && pressedPieSlot < 8) {
+        lv_obj_t* seg = pieSegments[pressedPieSlot];
+        if (seg) lv_obj_clear_state(seg, kPressCueState);
+        pressedPieSlot = -1;
+    }
+
     // Enable/disable pie helpers depending on the active template.
     if (pieHitLayer) {
-        if (isPie) lv_obj_clear_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
-        else lv_obj_add_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
+        if (isPie) {
+            lv_obj_clear_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
+            // Keep the hit layer above the arc visuals.
+            lv_obj_move_foreground(pieHitLayer);
+        } else {
+            lv_obj_add_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
     // Apply macro screen background (optional per-screen override, else global default).
@@ -656,6 +933,14 @@ void MacroPadScreen::refreshButtons(bool force) {
         if (!layout.isSlotUsed((uint8_t)i)) {
             setButtonVisible(buttons[i], false);
             continue;
+        }
+
+        // In pie mode, input should be owned by the full-screen hit layer.
+        // Disable clickability for underlying slot containers to avoid LVGL
+        // re-targeting the pressed object mid-press.
+        if (buttons[i]) {
+            if (isPie) lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_CLICKABLE);
+            else lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_CLICKABLE);
         }
 
         if (btnCfg->action != MacroButtonAction::None) {
@@ -686,16 +971,21 @@ void MacroPadScreen::refreshButtons(bool force) {
             ? btnCfg->icon_color
             : cfg->default_icon_color;
 
-        if (buttons[i]) {
-            // In pie mode, outer wedge slots (0..7) use the ring segments for background,
-            // so keep the container transparent to avoid square blocks behind the icon.
+        // Keep button base/pressed styles aligned with configured colors.
+        {
             const bool isPieOuter = isPie && (i < 8);
+            const lv_color_t base = lv_color_hex(buttonBg);
+            const lv_color_t flash = flashColorFor(base);
+
             if (isPieOuter) {
-                lv_obj_set_style_bg_opa(buttons[i], LV_OPA_TRANSP, 0);
+                lv_style_set_bg_opa(&pressStyles.btnBase[i], LV_OPA_TRANSP);
+                lv_style_set_bg_opa(&pressStyles.btnPressed[i], LV_OPA_TRANSP);
             } else {
-                lv_obj_set_style_bg_color(buttons[i], lv_color_hex(buttonBg), 0);
-                lv_obj_set_style_bg_opa(buttons[i], LV_OPA_COVER, 0);
+                lv_style_set_bg_opa(&pressStyles.btnBase[i], LV_OPA_COVER);
+                lv_style_set_bg_opa(&pressStyles.btnPressed[i], LV_OPA_COVER);
             }
+            lv_style_set_bg_color(&pressStyles.btnBase[i], base);
+            lv_style_set_bg_color(&pressStyles.btnPressed[i], flash);
         }
         if (labels[i]) {
             lv_obj_set_style_text_color(labels[i], lv_color_hex(labelColor), 0);
@@ -705,8 +995,12 @@ void MacroPadScreen::refreshButtons(bool force) {
         if (isPie && i < 8) {
             lv_obj_t* seg = pieSegments[i];
             if (seg) {
-                lv_obj_set_style_arc_color(seg, lv_color_hex(buttonBg), LV_PART_INDICATOR);
-                lv_obj_set_style_arc_opa(seg, LV_OPA_COVER, LV_PART_INDICATOR);
+                const lv_color_t base = lv_color_hex(buttonBg);
+                const lv_color_t flash = flashColorFor(base);
+                lv_style_set_arc_color(&pressStyles.segBase[i], base);
+                lv_style_set_arc_color(&pressStyles.segPressed[i], flash);
+                lv_style_set_arc_opa(&pressStyles.segBase[i], LV_OPA_COVER);
+                lv_style_set_arc_opa(&pressStyles.segPressed[i], LV_OPA_COVER);
                 lv_obj_clear_flag(seg, LV_OBJ_FLAG_HIDDEN);
             }
         }
@@ -880,8 +1174,27 @@ void MacroPadScreen::buttonEventCallback(lv_event_t* e) {
     ButtonCtx* ctx = (ButtonCtx*)lv_event_get_user_data(e);
     if (!ctx || !ctx->self) return;
 
+    lv_obj_t* obj = lv_event_get_target(e);
+    const lv_event_code_t code = lv_event_get_code(e);
+
+    // Ensure pressed visual feedback (kPressCueState) is driven for our touch targets.
+    if (obj) {
+        if (code == LV_EVENT_PRESSED) {
+            lv_obj_add_state(obj, kPressCueState);
+            ctx->self->notePressed(ctx->buttonIndex);
+            return;
+        }
+        if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+            // Enforce a minimum visible cue time on release.
+            ctx->self->scheduleReleaseClear(ctx->buttonIndex);
+            return;
+        }
+    }
+
     MacroPadScreen* self = ctx->self;
     const uint8_t b = ctx->buttonIndex;
 
-    self->handleButtonClick(b);
+    if (code == LV_EVENT_CLICKED) {
+        self->handleButtonClick(b);
+    }
 }

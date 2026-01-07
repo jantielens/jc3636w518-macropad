@@ -34,6 +34,21 @@ private:
         uint8_t buttonIndex;
     };
 
+    struct PressAnimStyles {
+        bool inited;
+        lv_style_transition_dsc_t btnTrans;
+
+        lv_style_t btnBase[MACROS_BUTTONS_PER_SCREEN];
+        lv_style_t btnPressed[MACROS_BUTTONS_PER_SCREEN];
+
+        lv_style_t segBase[8];
+        lv_style_t segPressed[8];
+
+        PressAnimStyles() : inited(false) {}
+    };
+
+    static constexpr uint32_t kMinPressCueMs = 100;
+
     DisplayManager* displayMgr;
     uint8_t screenIndex;
 
@@ -48,6 +63,13 @@ private:
     lv_obj_t* pieSegments[8];
     lv_obj_t* emptyStateLabel;
     ButtonCtx buttonCtx[MACROS_BUTTONS_PER_SCREEN];
+
+    PressAnimStyles pressStyles;
+    int8_t pressedPieSlot;
+
+    lv_timer_t* pressHoldTimer;
+    uint32_t pressDownTick[MACROS_BUTTONS_PER_SCREEN];
+    uint32_t pendingClearTick[MACROS_BUTTONS_PER_SCREEN];
 
     uint32_t lastUpdateMs;
 
@@ -65,6 +87,14 @@ private:
 
     const char* resolveTemplateId(const MacroConfig* cfg) const;
     void buildLayoutContext(macropad_layout::MacroPadLayoutContext& out);
+
+    void ensurePressStylesInited();
+
+    void notePressed(uint8_t slotIndex);
+    void scheduleReleaseClear(uint8_t slotIndex);
+    void cancelPendingClear(uint8_t slotIndex);
+    void clearPressedVisual(uint8_t slotIndex);
+    static void pressHoldTimerCallback(lv_timer_t* t);
 
     void handleButtonClick(uint8_t buttonIndex);
     static void pieEventCallback(lv_event_t* e);
