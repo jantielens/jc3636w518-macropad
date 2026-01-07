@@ -1,5 +1,7 @@
 #include "macropad_screen.h"
 
+#include "macropad_layout.h"
+
 #include "../display_manager.h"
 #include "../macros_config.h"
 #include "../macro_templates.h"
@@ -20,7 +22,6 @@
 #include "../screen_saver_manager.h"
 #endif
 
-#include <math.h>
 #include <esp_system.h>
 #include <string.h>
 
@@ -29,12 +30,6 @@
 namespace {
 
 constexpr uint32_t kUiRefreshIntervalMs = 500;
-
-static float clampf(float v, float lo, float hi) {
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
 
 static void setButtonVisible(lv_obj_t* btn, bool visible) {
     if (!btn) return;
@@ -252,6 +247,26 @@ BleKeyboardManager* MacroPadScreen::getBleKeyboard() const {
     return displayMgr->getBleKeyboard();
 }
 
+const char* MacroPadScreen::resolveTemplateId(const MacroConfig* cfg) const {
+    const char* tpl = (cfg && cfg->template_id[screenIndex][0]) ? cfg->template_id[screenIndex] : macro_templates::default_id();
+    if (!macro_templates::is_valid(tpl)) {
+        tpl = macro_templates::default_id();
+    }
+    return tpl;
+}
+
+void MacroPadScreen::buildLayoutContext(macropad_layout::MacroPadLayoutContext& out) {
+    out = {
+        .displayMgr = displayMgr,
+        .screen = screen,
+        .buttons = buttons,
+        .labels = labels,
+        .icons = icons,
+        .pieHitLayer = pieHitLayer,
+        .pieSegments = pieSegments,
+    };
+}
+
 void MacroPadScreen::create() {
     if (screen) return;
 
@@ -412,110 +427,15 @@ void MacroPadScreen::layoutButtons() {
     if (!screen || !displayMgr) return;
 
     const MacroConfig* cfg = getMacroConfig();
-    const char* tpl = (cfg && cfg->template_id[screenIndex][0]) ? cfg->template_id[screenIndex] : macro_templates::default_id();
-    if (!macro_templates::is_valid(tpl)) {
-        tpl = macro_templates::default_id();
-    }
+    const char* tpl = resolveTemplateId(cfg);
 
     // Cache the applied template so update() can detect changes.
     strlcpy(lastTemplateId, tpl, sizeof(lastTemplateId));
 
-    if (strcmp(tpl, macro_templates::kTemplateStackSides5) == 0) {
-        layoutButtonsFiveStack();
-    } else if (strcmp(tpl, macro_templates::kTemplateRoundPie8) == 0) {
-        layoutButtonsPie8();
-    } else if (strcmp(tpl, macro_templates::kTemplateWideSides3) == 0) {
-        layoutButtonsWideCenter();
-    } else if (strcmp(tpl, macro_templates::kTemplateSplitSides4) == 0) {
-        layoutButtonsFourSplit();
-    } else {
-        layoutButtonsRound9();
-    }
-}
-
-bool MacroPadScreen::isSlotUsedByTemplate(uint8_t slot) const {
-    const MacroConfig* cfg = getMacroConfig();
-    const char* tpl = (cfg && cfg->template_id[screenIndex][0]) ? cfg->template_id[screenIndex] : macro_templates::default_id();
-    if (!macro_templates::is_valid(tpl)) {
-        tpl = macro_templates::default_id();
-    }
-
-    if (strcmp(tpl, macro_templates::kTemplateStackSides5) == 0) {
-        return slot < 5;
-    }
-
-    if (strcmp(tpl, macro_templates::kTemplateWideSides3) == 0) {
-        return slot < 3;
-    }
-
-    if (strcmp(tpl, macro_templates::kTemplateSplitSides4) == 0) {
-        return slot == 0 || slot == 2 || slot == 3 || slot == 4;
-    }
-
-    if (strcmp(tpl, macro_templates::kTemplateRoundPie8) == 0) {
-        return slot < 9;
-    }
-
-    // round9
-    return slot < 9;
-}
-
-int MacroPadScreen::pieSlotFromPoint(int x, int y) const {
-    if (!displayMgr) return -1;
-    const int w = displayMgr->getActiveWidth();
-    const int h = displayMgr->getActiveHeight();
-    const int cx = w / 2;
-    const int cy = h / 2;
-    const int dx = x - cx;
-    const int dy = y - cy;
-
-    const int minDim = (w < h) ? w : h;
-    const float half = (float)minDim * 0.5f;
-
-    // Keep the hit-testing geometry consistent with the visual layout in layoutButtonsPie8().
-    const float arcWidth = clampf((float)minDim * 0.22f, 44.0f, half * 0.60f);
-    const float baseSeparatorPx = clampf((float)minDim * 0.015f, 6.0f, 12.0f);
-    const float separatorPx = baseSeparatorPx + 3.0f; // requested: +3px between wedges
-
-    // Tunable radii: center hit radius and ring region.
-    const float ringOuter = half;
-    const float ringInnerEdge = clampf(ringOuter - arcWidth, 0.0f, ringOuter);
-    const float centerR = clampf(ringInnerEdge - separatorPx, 0.0f, ringOuter);
-    const float ringInner = ringInnerEdge;
-
-    const float r2 = (float)dx * (float)dx + (float)dy * (float)dy;
-    const float centerR2 = centerR * centerR;
-    const float ringInner2 = ringInner * ringInner;
-    const float ringOuter2 = ringOuter * ringOuter;
-
-    if (r2 <= centerR2) return 8;
-    if (r2 < ringInner2 || r2 > ringOuter2) return -1;
-
-    // Compute an angle where 0° is at the top and increases clockwise.
-    // (x,y) screen coords => +y down.
-    float ang = atan2f((float)dx, (float)-dy) * 180.0f / (float)M_PI;
-    if (ang < 0) ang += 360.0f;
-
-    // Slot 0 is centered at 0° (top). Offset by half a slice so the boundaries
-    // land between slots.
-    const float slice = 45.0f;
-    int slot = (int)floorf((ang + (slice * 0.5f)) / slice);
-    slot %= 8;
-    if (slot < 0) slot += 8;
-
-    // Avoid clicks on the separator gaps between wedges.
-    const float rStrokeMid = ringOuter - (arcWidth * 0.5f);
-    const float gapDeg = (rStrokeMid > 1.0f)
-        ? (separatorPx / rStrokeMid) * (180.0f / (float)M_PI)
-        : 0.0f;
-    const float sweepDeg = slice - gapDeg;
-    const float slotCenter = (float)slot * slice;
-    float delta = ang - slotCenter;
-    while (delta > 180.0f) delta -= 360.0f;
-    while (delta <= -180.0f) delta += 360.0f;
-    if (fabsf(delta) > (sweepDeg * 0.5f)) return -1;
-
-    return slot;
+    const macropad_layout::IMacroPadLayout& layout = macropad_layout::layoutForId(tpl);
+    macropad_layout::MacroPadLayoutContext ctx;
+    buildLayoutContext(ctx);
+    layout.apply(ctx);
 }
 
 void MacroPadScreen::pieEventCallback(lv_event_t* e) {
@@ -527,7 +447,15 @@ void MacroPadScreen::pieEventCallback(lv_event_t* e) {
 
     lv_point_t p;
     lv_indev_get_point(indev, &p);
-    const int slot = self->pieSlotFromPoint(p.x, p.y);
+
+    const MacroConfig* cfg = self->getMacroConfig();
+    const char* tpl = self->resolveTemplateId(cfg);
+
+    const macropad_layout::IMacroPadLayout& layout = macropad_layout::layoutForId(tpl);
+    macropad_layout::MacroPadLayoutContext ctx;
+    self->buildLayoutContext(ctx);
+
+    const int slot = layout.slotFromPoint(p.x, p.y, ctx);
     if (slot < 0) return;
     self->handleButtonClick((uint8_t)slot);
 }
@@ -565,76 +493,6 @@ void MacroPadScreen::handleButtonClick(uint8_t b) {
         BleKeyboardManager* kb = getBleKeyboard();
         ducky_execute(btnCfg->script, kb);
         return;
-    }
-}
-
-void MacroPadScreen::layoutButtonsWideCenter() {
-    if (!screen || !displayMgr) return;
-
-    const int w = displayMgr->getActiveWidth();
-    const int h = displayMgr->getActiveHeight();
-
-    // Match five_stack margins/spacing logic.
-    const int padX = (w + h) / 2 / 24; // ~15px at 360
-    const int spacing = (padX >= 9) ? (padX / 3) : 3; // ~5px at 360
-
-    // Touch targets. Side buttons must touch the screen edges.
-    const int minTouchPx = 52;
-    const int minCenterW = minTouchPx * 2;
-
-    int sideW = (int)((float)w * 0.18f);
-    if (sideW < minTouchPx) sideW = minTouchPx;
-    const int maxSideW = (w - minCenterW - (2 * spacing)) / 2;
-    if (sideW > maxSideW) sideW = maxSideW;
-
-    const int xLeft = 0;
-    const int xCenter = sideW + spacing;
-    int centerW = w - (2 * sideW) - (2 * spacing);
-    if (centerW < minCenterW) centerW = minCenterW;
-    const int xRight = w - sideW;
-
-    const int yTop = 0;
-    const int fullH = h;
-
-    // Used slots: 0=center, 1=right, 2=left. Hide everything else.
-    for (int i = 0; i < 3; i++) {
-        if (!buttons[i]) continue;
-        lv_obj_set_style_radius(buttons[i], 10, 0);
-        lv_obj_set_style_border_width(buttons[i], 0, 0);
-        lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-    }
-    for (int i = 3; i < MACROS_BUTTONS_PER_SCREEN; i++) {
-        if (buttons[i]) lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    // Center (slot 0)
-    if (buttons[0]) {
-        lv_obj_set_pos(buttons[0], xCenter, yTop);
-        lv_obj_set_size(buttons[0], centerW, fullH);
-        if (labels[0]) {
-            lv_obj_set_width(labels[0], (centerW > 12) ? (centerW - 12) : centerW);
-            lv_obj_center(labels[0]);
-        }
-    }
-
-    // Right (slot 1)
-    if (buttons[1]) {
-        lv_obj_set_pos(buttons[1], xRight, yTop);
-        lv_obj_set_size(buttons[1], sideW, fullH);
-        if (labels[1]) {
-            lv_obj_set_width(labels[1], (sideW > 8) ? (sideW - 8) : sideW);
-            lv_obj_center(labels[1]);
-        }
-    }
-
-    // Left (slot 2)
-    if (buttons[2]) {
-        lv_obj_set_pos(buttons[2], xLeft, yTop);
-        lv_obj_set_size(buttons[2], sideW, fullH);
-        if (labels[2]) {
-            lv_obj_set_width(labels[2], (sideW > 8) ? (sideW - 8) : sideW);
-            lv_obj_center(labels[2]);
-        }
     }
 }
 
@@ -762,408 +620,6 @@ void MacroPadScreen::updateButtonLayout(uint8_t index, bool hasIcon, bool hasLab
     lv_obj_align_to(lbl, icon, LV_ALIGN_OUT_BOTTOM_MID, 0, gap);
 }
 
-void MacroPadScreen::layoutButtonsFourSplit() {
-    if (!screen || !displayMgr) return;
-
-    const int w = displayMgr->getActiveWidth();
-    const int h = displayMgr->getActiveHeight();
-
-    // Match five_stack margins/spacing logic.
-    const int padX = (w + h) / 2 / 24; // ~15px at 360
-    const int spacing = (padX >= 9) ? (padX / 3) : 3; // ~5px at 360
-
-    const int minTouchPx = 52;
-    const int minCenterW = minTouchPx * 2;
-
-    int sideW = (int)((float)w * 0.18f);
-    if (sideW < minTouchPx) sideW = minTouchPx;
-    const int maxSideW = (w - minCenterW - (2 * spacing)) / 2;
-    if (sideW > maxSideW) sideW = maxSideW;
-
-    const int xLeft = 0;
-    const int xCenter = sideW + spacing;
-    int centerW = w - (2 * sideW) - (2 * spacing);
-    if (centerW < minCenterW) centerW = minCenterW;
-    const int xRight = w - sideW;
-
-    const int yTop = 0;
-    const int fullH = h;
-
-    // Used slots: 0 (center-top), 2 (center-bottom), 3 (left), 4 (right).
-    // Hide everything else.
-    for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
-        if (!buttons[i]) continue;
-        const bool used = (i == 0 || i == 2 || i == 3 || i == 4);
-        if (used) {
-            lv_obj_set_style_radius(buttons[i], 10, 0);
-            lv_obj_set_style_border_width(buttons[i], 0, 0);
-            lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-
-    // Center is split horizontally into top/bottom.
-    int topH = (fullH - spacing) / 2;
-    int bottomH = fullH - topH - spacing;
-    if (topH < minTouchPx || bottomH < minTouchPx) {
-        // Clamp if needed.
-        topH = (topH < minTouchPx) ? minTouchPx : topH;
-        bottomH = fullH - topH - spacing;
-        if (bottomH < minTouchPx) {
-            bottomH = minTouchPx;
-            topH = fullH - bottomH - spacing;
-            if (topH < minTouchPx) topH = minTouchPx;
-        }
-    }
-
-    // Slot 0 = center top.
-    if (buttons[0]) {
-        lv_obj_set_pos(buttons[0], xCenter, yTop);
-        lv_obj_set_size(buttons[0], centerW, topH);
-        if (labels[0]) {
-            lv_obj_set_width(labels[0], (centerW > 12) ? (centerW - 12) : centerW);
-            lv_obj_center(labels[0]);
-        }
-    }
-
-    // Slot 2 = center bottom.
-    if (buttons[2]) {
-        lv_obj_set_pos(buttons[2], xCenter, yTop + topH + spacing);
-        lv_obj_set_size(buttons[2], centerW, bottomH);
-        if (labels[2]) {
-            lv_obj_set_width(labels[2], (centerW > 12) ? (centerW - 12) : centerW);
-            lv_obj_center(labels[2]);
-        }
-    }
-
-    // Side buttons full-height, touching outer edges.
-    if (buttons[3]) {
-        lv_obj_set_pos(buttons[3], xLeft, yTop);
-        lv_obj_set_size(buttons[3], sideW, fullH);
-        if (labels[3]) {
-            lv_obj_set_width(labels[3], (sideW > 8) ? (sideW - 8) : sideW);
-            lv_obj_center(labels[3]);
-        }
-    }
-    if (buttons[4]) {
-        lv_obj_set_pos(buttons[4], xRight, yTop);
-        lv_obj_set_size(buttons[4], sideW, fullH);
-        if (labels[4]) {
-            lv_obj_set_width(labels[4], (sideW > 8) ? (sideW - 8) : sideW);
-            lv_obj_center(labels[4]);
-        }
-    }
-}
-
-void MacroPadScreen::layoutButtonsRound9() {
-    if (!screen || !displayMgr) return;
-
-    const int w = displayMgr->getActiveWidth();
-    const int h = displayMgr->getActiveHeight();
-    const int cx = w / 2;
-    const int cy = h / 2;
-
-    // Button sizing tuned for 360x360 round.
-    // Goal: use the full circle (touch the outer edge) and make outer buttons
-    // barely separated from each other.
-    const int minDim = (w < h) ? w : h;
-    const float half = (float)minDim * 0.5f;
-
-    // Adjacent outer buttons are 45° apart.
-    // Pick the largest radius that still leaves a small gap between them.
-    const int desiredGapPx = 1;
-    const float s = sinf((float)M_PI / 8.0f); // sin(22.5°)
-    float r = (s * (float)minDim - (float)desiredGapPx) / (2.0f * (1.0f + s));
-    if (r < 18.0f) r = 18.0f;
-
-    int btnSize = (int)floorf(2.0f * r);
-    if (btnSize < 36) btnSize = 36;
-    if (btnSize > minDim) btnSize = minDim;
-    const int btnRadius = btnSize / 2;
-
-    // Outer ring radius: touch the outer edge of the active area.
-    const float outerRadius = half - (float)btnRadius;
-
-    // Label width scales with button size.
-    const int labelWidth = (btnSize > 24) ? (btnSize - 18) : btnSize;
-
-    // Round discs.
-    for (int i = 0; i < 9; i++) {
-        if (!buttons[i]) continue;
-        lv_obj_set_style_radius(buttons[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(buttons[i], 0, 0);
-        lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-    }
-    // Hide unused.
-    for (int i = 9; i < MACROS_BUTTONS_PER_SCREEN; i++) {
-        if (buttons[i]) lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    // Center button (#9) is index 8.
-    if (buttons[8]) {
-        lv_obj_set_size(buttons[8], btnSize, btnSize);
-        lv_obj_set_pos(buttons[8], cx - btnRadius, cy - btnRadius);
-        if (labels[8]) {
-            lv_obj_set_width(labels[8], labelWidth);
-            lv_obj_center(labels[8]);
-        }
-    }
-
-    // B1..B8 are indices 0..7.
-    for (int i = 0; i < 8; i++) {
-        if (!buttons[i]) continue;
-
-        lv_obj_set_size(buttons[i], btnSize, btnSize);
-
-        const float deg = -90.0f + (float)i * 45.0f; // B1 at top, clockwise
-        const float rad = deg * (float)M_PI / 180.0f;
-
-        const int bx = (int)lroundf((float)cx + outerRadius * cosf(rad));
-        const int by = (int)lroundf((float)cy + outerRadius * sinf(rad));
-
-        lv_obj_set_pos(buttons[i], bx - btnRadius, by - btnRadius);
-
-        if (labels[i]) {
-            lv_obj_set_width(labels[i], labelWidth);
-            lv_obj_center(labels[i]);
-        }
-    }
-}
-
-void MacroPadScreen::layoutButtonsPie8() {
-    if (!screen || !displayMgr) return;
-
-    const int w = displayMgr->getActiveWidth();
-    const int h = displayMgr->getActiveHeight();
-    const int cx = w / 2;
-    const int cy = h / 2;
-    const int minDim = (w < h) ? w : h;
-
-    // Ring geometry for the segment visuals.
-    const int ringSize = minDim;
-    const int ringX = cx - (ringSize / 2);
-    const int ringY = cy - (ringSize / 2);
-
-    const float half = (float)minDim * 0.5f;
-
-    // Visual separation between wedges. We express it in pixels and convert to degrees.
-    // Requested change: increase separator by 3px.
-    const float baseSeparatorPx = clampf((float)minDim * 0.015f, 6.0f, 12.0f);
-    const float separatorPx = baseSeparatorPx + 3.0f;
-
-    const int arcWidth = (int)clampf((float)minDim * 0.22f, 44.0f, half * 0.60f);
-    const float ringOuter = half;
-    const float ringInnerEdge = clampf(ringOuter - (float)arcWidth, 0.0f, ringOuter);
-    const float rStrokeMid = ringOuter - ((float)arcWidth * 0.5f);
-    const float gapDeg = (rStrokeMid > 1.0f)
-        ? (separatorPx / rStrokeMid) * (180.0f / (float)M_PI)
-        : 0.0f;
-    const float sweepDeg = 45.0f - gapDeg;
-
-    // Place the hit layer above everything.
-    if (pieHitLayer) {
-        lv_obj_set_pos(pieHitLayer, 0, 0);
-        lv_obj_set_size(pieHitLayer, w, h);
-        lv_obj_clear_flag(pieHitLayer, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(pieHitLayer);
-    }
-
-    // Configure the 8 ring segments; actual color + visibility is applied in refreshButtons().
-    for (int i = 0; i < 8; i++) {
-        lv_obj_t* seg = pieSegments[i];
-        if (!seg) continue;
-
-        lv_obj_set_pos(seg, ringX, ringY);
-        lv_obj_set_size(seg, ringSize, ringSize);
-
-        lv_obj_set_style_arc_width(seg, arcWidth, LV_PART_INDICATOR);
-
-        // Angle model: 0°=right, 90°=down, 180°=left, 270°=up (LVGL default).
-        // Slot 0 should be centered at top (270°) and proceed clockwise.
-        const float centerDeg = 270.0f + (float)i * 45.0f;
-        const float startF = centerDeg - (sweepDeg * 0.5f);
-        const float endF = centerDeg + (sweepDeg * 0.5f);
-        int start = (int)lroundf(startF);
-        int end = (int)lroundf(endF);
-        // Normalize to [0, 360)
-        start %= 360;
-        end %= 360;
-        if (start < 0) start += 360;
-        if (end < 0) end += 360;
-
-        lv_arc_set_rotation(seg, 0);
-        lv_arc_set_bg_angles(seg, 0, 0);
-        lv_arc_set_angles(seg, start, end);
-        lv_obj_move_background(seg);
-    }
-
-    // Position the 8 outer icon/label containers. Keep them slightly outward so
-    // the center-to-ring gap stays visually clean.
-    const float rMid = rStrokeMid + (separatorPx * 0.5f);
-    int outerBox = (int)clampf((float)arcWidth * 1.10f, 64.0f, 128.0f);
-    const int outerRadius = outerBox / 2;
-    const int labelWidth = (outerBox > 24) ? (outerBox - 18) : outerBox;
-
-    for (int i = 0; i < 8; i++) {
-        if (!buttons[i]) continue;
-
-        // Make these containers invisible; the segment arc is the background.
-        lv_obj_set_style_bg_opa(buttons[i], LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(buttons[i], 0, 0);
-        lv_obj_set_style_radius(buttons[i], 0, 0);
-
-        // Keep objects around for icon+label layout.
-        lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-
-        lv_obj_set_size(buttons[i], outerBox, outerBox);
-
-        const float deg = -90.0f + (float)i * 45.0f;
-        const float rad = deg * (float)M_PI / 180.0f;
-        const int bx = (int)lroundf((float)cx + rMid * cosf(rad));
-        const int by = (int)lroundf((float)cy + rMid * sinf(rad));
-        lv_obj_set_pos(buttons[i], bx - outerRadius, by - outerRadius);
-
-        if (labels[i]) {
-            lv_obj_set_width(labels[i], labelWidth);
-            lv_obj_center(labels[i]);
-        }
-    }
-
-    // Center slot (8): standard circular button, centered.
-    // Keep the radial gap between the center and the ring equal to the wedge separator.
-    int centerBox = (int)clampf((ringInnerEdge - separatorPx) * 2.0f, 72.0f, (float)minDim);
-    const int centerRadius = centerBox / 2;
-    const int centerLabelWidth = (centerBox > 24) ? (centerBox - 18) : centerBox;
-
-    if (buttons[8]) {
-        lv_obj_set_style_radius(buttons[8], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(buttons[8], 0, 0);
-        lv_obj_clear_flag(buttons[8], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_size(buttons[8], centerBox, centerBox);
-        lv_obj_set_pos(buttons[8], cx - centerRadius, cy - centerRadius);
-        if (labels[8]) {
-            lv_obj_set_width(labels[8], centerLabelWidth);
-            lv_obj_center(labels[8]);
-        }
-    }
-
-    // Hide all unused slots.
-    for (int i = 9; i < MACROS_BUTTONS_PER_SCREEN; i++) {
-        if (buttons[i]) lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-    }
-}
-
-void MacroPadScreen::layoutButtonsFiveStack() {
-    if (!screen || !displayMgr) return;
-
-    const int w = displayMgr->getActiveWidth();
-    const int h = displayMgr->getActiveHeight();
-
-    // Layout intentionally uses the full rectangular screen bounds (0..w, 0..h).
-    // It's OK if elements fall outside the visible round area.
-    const int padX = (w + h) / 2 / 24; // ~15px at 360
-    // Use one spacing value for both axes so vertical gaps match horizontal gaps.
-    const int spacing = (padX >= 9) ? (padX / 3) : 3; // ~5px at 360
-
-    // Touch targets. Side buttons must touch the screen edges.
-    const int minTouchPx = 52;
-
-    // Side width: try to keep them smaller than center, but wide enough to tap,
-    // and wide enough to reach the screen edges.
-    const int minCenterW = minTouchPx * 2;
-    int sideW = (int)((float)w * 0.18f);
-    if (sideW < minTouchPx) sideW = minTouchPx;
-    const int maxSideW = (w - minCenterW - (2 * spacing)) / 2;
-    if (sideW > maxSideW) sideW = maxSideW;
-
-    // Center stack is separated from the side buttons by `spacing`.
-    const int xLeft = 0;
-    const int xCenter = sideW + spacing;
-    int centerW = w - (2 * sideW) - (2 * spacing);
-    if (centerW < minCenterW) centerW = minCenterW;
-    const int xRight = w - sideW;
-    const int yTop = 0;
-    const int usableH = h;
-
-    // Stack fills full height.
-    // Buttons 1 and 3 (slots 0 and 2) touch the top/bottom screen edges.
-    // Button 2 (slot 1) is taller and uses the remaining space.
-    // Make top/bottom taller and the middle less tall.
-    int topH = (int)((float)usableH * 0.30f);
-    int bottomH = topH;
-    if (topH < minTouchPx) topH = minTouchPx;
-    if (bottomH < minTouchPx) bottomH = minTouchPx;
-    int middleH = usableH - topH - bottomH - (2 * spacing);
-    if (middleH < minTouchPx) {
-        // Steal from top/bottom evenly if the screen is too small.
-        const int need = minTouchPx - middleH;
-        const int stealEach = (need + 1) / 2;
-        topH = (topH - stealEach > minTouchPx) ? (topH - stealEach) : minTouchPx;
-        bottomH = (bottomH - stealEach > minTouchPx) ? (bottomH - stealEach) : minTouchPx;
-        middleH = usableH - topH - bottomH - (2 * spacing);
-        if (middleH < minTouchPx) middleH = minTouchPx;
-    }
-
-    // Show slots 0..4, hide the rest.
-    for (int i = 0; i < 5; i++) {
-        if (!buttons[i]) continue;
-        lv_obj_set_style_radius(buttons[i], 10, 0);
-        lv_obj_set_style_border_width(buttons[i], 0, 0);
-        lv_obj_clear_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-    }
-    for (int i = 5; i < MACROS_BUTTONS_PER_SCREEN; i++) {
-        if (buttons[i]) lv_obj_add_flag(buttons[i], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    // Slots 0,1,2 = stacked center.
-    if (buttons[0]) {
-        lv_obj_set_pos(buttons[0], xCenter, yTop);
-        lv_obj_set_size(buttons[0], centerW, topH);
-        if (labels[0]) {
-            lv_obj_set_width(labels[0], (centerW > 12) ? (centerW - 12) : centerW);
-            lv_obj_center(labels[0]);
-        }
-    }
-    if (buttons[1]) {
-        lv_obj_set_pos(buttons[1], xCenter, yTop + topH + spacing);
-        lv_obj_set_size(buttons[1], centerW, middleH);
-        if (labels[1]) {
-            lv_obj_set_width(labels[1], (centerW > 12) ? (centerW - 12) : centerW);
-            lv_obj_center(labels[1]);
-        }
-    }
-    if (buttons[2]) {
-        lv_obj_set_pos(buttons[2], xCenter, yTop + usableH - bottomH);
-        lv_obj_set_size(buttons[2], centerW, bottomH);
-        if (labels[2]) {
-            lv_obj_set_width(labels[2], (centerW > 12) ? (centerW - 12) : centerW);
-            lv_obj_center(labels[2]);
-        }
-    }
-
-    // Slot 3 = left rail, Slot 4 = right rail.
-    // Align with the top of button 1 and bottom of button 3.
-    const int ySide = yTop;
-    const int sideH = usableH;
-    if (buttons[3]) {
-        lv_obj_set_pos(buttons[3], xLeft, ySide);
-        lv_obj_set_size(buttons[3], sideW, sideH);
-        if (labels[3]) {
-            lv_obj_set_width(labels[3], (sideW > 8) ? (sideW - 8) : sideW);
-            lv_obj_center(labels[3]);
-        }
-    }
-    if (buttons[4]) {
-        lv_obj_set_pos(buttons[4], xRight, ySide);
-        lv_obj_set_size(buttons[4], sideW, sideH);
-        if (labels[4]) {
-            lv_obj_set_width(labels[4], (sideW > 8) ? (sideW - 8) : sideW);
-            lv_obj_center(labels[4]);
-        }
-    }
-}
-
 void MacroPadScreen::refreshButtons(bool force) {
     if (!screen) return;
 
@@ -1176,11 +632,9 @@ void MacroPadScreen::refreshButtons(bool force) {
     const MacroConfig* cfg = getMacroConfig();
     if (!cfg) return;
 
-    const char* tpl = (cfg && cfg->template_id[screenIndex][0]) ? cfg->template_id[screenIndex] : macro_templates::default_id();
-    if (!macro_templates::is_valid(tpl)) {
-        tpl = macro_templates::default_id();
-    }
-    const bool isPie = (strcmp(tpl, macro_templates::kTemplateRoundPie8) == 0);
+    const char* tpl = resolveTemplateId(cfg);
+    const macropad_layout::IMacroPadLayout& layout = macropad_layout::layoutForId(tpl);
+    const bool isPie = layout.isPie();
 
     // Enable/disable pie helpers depending on the active template.
     if (pieHitLayer) {
@@ -1199,7 +653,7 @@ void MacroPadScreen::refreshButtons(bool force) {
     for (int i = 0; i < MACROS_BUTTONS_PER_SCREEN; i++) {
         const MacroButtonConfig* btnCfg = &cfg->buttons[screenIndex][i];
 
-        if (!isSlotUsedByTemplate((uint8_t)i)) {
+        if (!layout.isSlotUsed((uint8_t)i)) {
             setButtonVisible(buttons[i], false);
             continue;
         }
@@ -1235,7 +689,7 @@ void MacroPadScreen::refreshButtons(bool force) {
         if (buttons[i]) {
             // In pie mode, outer wedge slots (0..7) use the ring segments for background,
             // so keep the container transparent to avoid square blocks behind the icon.
-            const bool isPieOuter = isPie && (i >= 0 && i < 8);
+            const bool isPieOuter = isPie && (i < 8);
             if (isPieOuter) {
                 lv_obj_set_style_bg_opa(buttons[i], LV_OPA_TRANSP, 0);
             } else {
@@ -1248,7 +702,7 @@ void MacroPadScreen::refreshButtons(bool force) {
         }
 
         // Pie ring segment background for slots 0..7.
-        if (isPie && i >= 0 && i < 8) {
+        if (isPie && i < 8) {
             lv_obj_t* seg = pieSegments[i];
             if (seg) {
                 lv_obj_set_style_arc_color(seg, lv_color_hex(buttonBg), LV_PART_INDICATOR);

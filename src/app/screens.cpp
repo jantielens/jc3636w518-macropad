@@ -20,6 +20,14 @@
 // Macro pad screens (8 fixed screens)
 #include "screens/macropad_screen.cpp"
 
+// MacroPad layout implementations (one-per-template)
+#include "screens/macropad_layout_factory.cpp"
+#include "screens/macropad_layout_round9.cpp"
+#include "screens/macropad_layout_pie8.cpp"
+#include "screens/macropad_layout_five_stack.cpp"
+#include "screens/macropad_layout_wide_center.cpp"
+#include "screens/macropad_layout_four_split.cpp"
+
 #if HAS_IMAGE_API
 #include "screens/direct_image_screen.cpp"
 #include "screens/lvgl_image_screen.cpp"

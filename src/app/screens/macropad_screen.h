@@ -11,6 +11,10 @@
 class BleKeyboardManager;
 class DisplayManager;
 
+namespace macropad_layout {
+struct MacroPadLayoutContext;
+}
+
 class MacroPadScreen : public Screen {
 public:
     MacroPadScreen(DisplayManager* manager = nullptr, uint8_t screenIndex = 0);
@@ -50,12 +54,6 @@ private:
     char lastTemplateId[MACROS_TEMPLATE_ID_MAX_LEN];
 
     void layoutButtons();
-    void layoutButtonsRound9();
-    void layoutButtonsPie8();
-    void layoutButtonsFiveStack();
-    void layoutButtonsWideCenter();
-    void layoutButtonsFourSplit();
-    bool isSlotUsedByTemplate(uint8_t slot) const;
     void refreshButtons(bool force);
 
     void updateButtonLayout(uint8_t index, bool hasIcon, bool hasLabel);
@@ -65,9 +63,10 @@ private:
     const MacroConfig* getMacroConfig() const;
     BleKeyboardManager* getBleKeyboard() const;
 
-    void handleButtonClick(uint8_t buttonIndex);
-    int pieSlotFromPoint(int x, int y) const;
+    const char* resolveTemplateId(const MacroConfig* cfg) const;
+    void buildLayoutContext(macropad_layout::MacroPadLayoutContext& out);
 
+    void handleButtonClick(uint8_t buttonIndex);
     static void pieEventCallback(lv_event_t* e);
 
     static void buttonEventCallback(lv_event_t* e);
