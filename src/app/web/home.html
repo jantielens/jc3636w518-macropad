@@ -131,10 +131,61 @@
                         </div>
 
                         <div class="form-group">
-                            <label for="macro_icon_id">Button icon</label>
-                            <input type="text" id="macro_icon_id" name="macro_icon_id" maxlength="31" placeholder="e.g., mic_off" list="macro_icon_id_list" autocomplete="off">
-                            <datalist id="macro_icon_id_list"></datalist>
-                            <small>Start typing to see available icons (auto-populated from the firmware’s compiled icon registry).</small>
+                            <label>Button icon</label>
+                            <div class="macro-icon-summary-row">
+                                <div id="macro_icon_summary" class="macro-icon-summary" aria-live="polite">—</div>
+                                <button type="button" class="btn btn-secondary macro-icon-btn" id="macro_icon_edit_btn">Edit</button>
+                                <button type="button" class="btn btn-secondary macro-icon-btn" id="macro_icon_clear_btn">Clear</button>
+                            </div>
+                            <small>Choose a monochrome icon (tintable) or an emoji. Emojis auto-download to FFat on Save.</small>
+                        </div>
+
+                        <div id="macro_icon_overlay" class="reboot-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="macro_icon_title">
+                            <div class="reboot-modal macro-icon-modal" role="document">
+                                <div class="ducky-help-header">
+                                    <h2 id="macro_icon_title" style="margin: 0;">Button icon</h2>
+                                </div>
+
+                                <div class="macro-icon-body">
+                                    <div class="macro-icon-toggle" role="tablist" aria-label="Icon type">
+                                        <button type="button" class="macro-icon-toggle-btn" id="macro_icon_tab_builtin" role="tab" aria-selected="true">Mono icon</button>
+                                        <button type="button" class="macro-icon-toggle-btn" id="macro_icon_tab_emoji" role="tab" aria-selected="false">Emoji</button>
+                                    </div>
+
+                                    <div id="macro_icon_panel_builtin" role="tabpanel" style="margin-top: 12px;">
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label for="macro_icon_builtin_search">Filter</label>
+                                            <input type="text" id="macro_icon_builtin_search" class="macro-icon-search" placeholder="Type to filter…" autocomplete="off">
+
+                                            <div class="macro-icon-hints">
+                                                <small>↑/↓ navigate, Enter apply, Esc close.</small>
+                                                <small id="macro_icon_builtin_count" style="text-align:right;"></small>
+                                            </div>
+
+                                            <label for="macro_icon_builtin_select" style="margin-top: 10px;">Select icon</label>
+                                            <div class="macro-icon-select-wrap">
+                                                <select id="macro_icon_builtin_select" class="macro-icon-select" size="12"></select>
+                                            </div>
+                                            <small>Built-in monochrome icons (tintable).</small>
+                                        </div>
+                                    </div>
+
+                                    <div id="macro_icon_panel_emoji" role="tabpanel" style="margin-top: 12px; display:none;">
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label for="macro_icon_emoji_input">Emoji</label>
+                                            <input type="text" id="macro_icon_emoji_input" class="macro-icon-emoji-input" maxlength="64" placeholder="e.g., 🎁" autocomplete="off" inputmode="text">
+                                            <small>Type or paste a single emoji. It will be downloaded on Save.</small>
+                                            <small class="macro-icon-license">Emoji images are sourced from Twemoji (CC-BY 4.0). Source: https://github.com/jdecked/twemoji</small>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="macro-icon-actions">
+                                    <button type="button" class="btn btn-primary macro-icon-btn" id="macro_icon_apply_btn">Apply</button>
+                                    <button type="button" class="btn btn-secondary macro-icon-btn" id="macro_icon_dialog_clear_btn">Clear</button>
+                                    <button type="button" class="btn btn-secondary macro-icon-btn" id="macro_icon_cancel_btn">Cancel</button>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="grid-3col" style="gap: 12px;">

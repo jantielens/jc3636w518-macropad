@@ -24,6 +24,7 @@
 
 #if HAS_DISPLAY && HAS_ICONS
 #include "icon_registry.h"
+#include "icon_store.h"
 #endif
 
 #if HAS_DISPLAY
@@ -76,6 +77,9 @@ void handleGetMacros(AsyncWebServerRequest *request);
 void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
 
 void handleGetIcons(AsyncWebServerRequest *request);
+void handleGetInstalledIcons(AsyncWebServerRequest *request);
+void handlePostIconInstall(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total);
+void handlePostIconGC(AsyncWebServerRequest *request);
 
 void handleGetFirmwareLatest(AsyncWebServerRequest *request);
 void handlePostFirmwareUpdate(AsyncWebServerRequest *request);
@@ -123,6 +127,23 @@ static void macros_body_reset() {
     if (toFree) {
         free(toFree);
     }
+}
+
+// ===== Icon install body (binary) =====
+static uint8_t* g_icon_body = nullptr;
+static size_t g_icon_body_total = 0;
+static bool g_icon_body_in_progress = false;
+static portMUX_TYPE g_icon_body_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void icon_body_reset() {
+    uint8_t* toFree = nullptr;
+    portENTER_CRITICAL(&g_icon_body_mux);
+    toFree = g_icon_body;
+    g_icon_body = nullptr;
+    g_icon_body_total = 0;
+    g_icon_body_in_progress = false;
+    portEXIT_CRITICAL(&g_icon_body_mux);
+    if (toFree) free(toFree);
 }
 
 // The runtime macro screen UI reads from this instance (defined in app.ino).
@@ -184,6 +205,25 @@ static const char* macro_action_to_string(MacroButtonAction a) {
     }
 }
 
+static const char* macro_icon_type_to_string(MacroIconType t) {
+    switch (t) {
+        case MacroIconType::None: return "none";
+        case MacroIconType::Builtin: return "builtin";
+        case MacroIconType::Emoji: return "emoji";
+        case MacroIconType::Asset: return "asset";
+        default: return "none";
+    }
+}
+
+static MacroIconType macro_icon_type_from_string(const char* s) {
+    if (!s || !*s) return MacroIconType::None;
+    if (strcasecmp(s, "none") == 0) return MacroIconType::None;
+    if (strcasecmp(s, "builtin") == 0) return MacroIconType::Builtin;
+    if (strcasecmp(s, "emoji") == 0) return MacroIconType::Emoji;
+    if (strcasecmp(s, "asset") == 0) return MacroIconType::Asset;
+    return MacroIconType::None;
+}
+
 static MacroButtonAction macro_action_from_string(const char* s) {
     if (!s || !*s) return MacroButtonAction::None;
     if (strcasecmp(s, "none") == 0) return MacroButtonAction::None;
@@ -214,7 +254,7 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
-    response->print("{\"success\":true,\"version\":6,\"buttons_per_screen\":");
+    response->print("{\"success\":true,\"version\":7,\"buttons_per_screen\":");
     response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
 
     // Global defaults (always present)
@@ -287,7 +327,11 @@ void handleGetMacros(AsyncWebServerRequest *request) {
             item["label"] = btn->label;
             item["action"] = macro_action_to_string(btn->action);
             item["script"] = btn->script;
-            item["icon_id"] = btn->icon_id;
+
+            JsonObject icon = item.createNestedObject("icon");
+            icon["type"] = macro_icon_type_to_string(btn->icon.type);
+            icon["id"] = btn->icon.id;
+            icon["display"] = btn->icon.display;
 
             if (btn->button_bg != MACROS_COLOR_UNSET) item["button_bg"] = btn->button_bg;
             if (btn->icon_color != MACROS_COLOR_UNSET) item["icon_color"] = btn->icon_color;
@@ -329,6 +373,143 @@ void handleGetIcons(AsyncWebServerRequest *request) {
 
     response->print("]}");
     request->send(response);
+}
+
+// GET /api/icons/installed
+// Returns installed (FFat) icon IDs so the portal can offer them too.
+void handleGetInstalledIcons(AsyncWebServerRequest *request) {
+    if (!portal_auth_gate(request)) return;
+
+    #if HAS_DISPLAY && HAS_ICONS
+    // Build a bounded JSON response.
+    char json[4096];
+    icon_store_list_installed(json, sizeof(json));
+    request->send(200, "application/json", json);
+    #else
+    request->send(200, "application/json", "{\"success\":true,\"source\":\"ffat\",\"icons\":[]}");
+    #endif
+}
+
+// POST /api/icons/install?id=<icon_id>
+// Body is an application/octet-stream blob produced by the portal.
+void handlePostIconInstall(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    if (!portal_auth_gate(request)) return;
+
+    #if !(HAS_DISPLAY && HAS_ICONS)
+    (void)data; (void)len; (void)index; (void)total;
+    request->send(400, "application/json", "{\"success\":false,\"message\":\"Icons not supported on this target\"}");
+    return;
+    #else
+
+    const String idParam = request->hasParam("id") ? request->getParam("id")->value() : String();
+    if (idParam.length() == 0) {
+        request->send(400, "application/json", "{\"success\":false,\"message\":\"Missing id\"}");
+        return;
+    }
+
+    // Chunk-safe body accumulation.
+    if (index == 0) {
+        bool alreadyInProgress = false;
+        uint8_t* staleBody = nullptr;
+        portENTER_CRITICAL(&g_icon_body_mux);
+        alreadyInProgress = g_icon_body_in_progress;
+        if (!alreadyInProgress) {
+            staleBody = g_icon_body;
+            g_icon_body = nullptr;
+            g_icon_body_total = total;
+            g_icon_body_in_progress = true;
+        }
+        portEXIT_CRITICAL(&g_icon_body_mux);
+
+        if (staleBody) free(staleBody);
+
+        if (alreadyInProgress) {
+            request->send(409, "application/json", "{\"success\":false,\"message\":\"Another icon install is in progress\"}");
+            return;
+        }
+
+        if (total == 0 || total > (256 * 1024)) {
+            icon_body_reset();
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid body size\"}");
+            return;
+        }
+
+        g_icon_body = (uint8_t*)malloc(total);
+        if (!g_icon_body) {
+            icon_body_reset();
+            request->send(500, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+            return;
+        }
+    }
+
+    if (!g_icon_body_in_progress || !g_icon_body || g_icon_body_total != total) {
+        icon_body_reset();
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Internal state error\"}");
+        return;
+    }
+
+    if (index + len > total) {
+        icon_body_reset();
+        request->send(400, "application/json", "{\"success\":false,\"message\":\"Body overflow\"}");
+        return;
+    }
+
+    memcpy(g_icon_body + index, data, len);
+
+    // Not done yet.
+    if (index + len != total) return;
+
+    char err[128];
+    const bool ok = icon_store_install_blob(idParam.c_str(), g_icon_body, g_icon_body_total, err, sizeof(err));
+    icon_body_reset();
+
+    if (!ok) {
+        AsyncResponseStream* response = request->beginResponseStream("application/json");
+        response->setCode(400);
+        response->print("{\"success\":false,\"message\":\"");
+        response->print(err);
+        response->print("\"}");
+        request->send(response);
+        return;
+    }
+
+    request->send(200, "application/json", "{\"success\":true}");
+    #endif
+}
+
+// POST /api/icons/gc
+// Deletes unused installed icons (emoji_*, user_*) based on the current (already-saved) macro config.
+void handlePostIconGC(AsyncWebServerRequest *request) {
+    if (!portal_auth_gate(request)) return;
+
+    #if !(HAS_DISPLAY && HAS_ICONS)
+    request->send(400, "application/json", "{\"success\":false,\"message\":\"Icons not supported on this target\"}");
+    return;
+    #else
+
+    size_t deleted = 0;
+    size_t bytes = 0;
+    char err[128];
+    const bool ok = icon_store_gc_unused_from_macros(&macro_config, &deleted, &bytes, err, sizeof(err));
+    if (!ok) {
+        AsyncResponseStream* response = request->beginResponseStream("application/json");
+        response->setCode(400);
+        response->print("{\"success\":false,\"message\":\"");
+        response->print(err);
+        response->print("\"}");
+        request->send(response);
+        return;
+    }
+
+    AsyncResponseStream* response = request->beginResponseStream("application/json");
+    response->setCode(200);
+    response->print("{\"success\":true,\"deleted\":");
+    response->print((unsigned)deleted);
+    response->print(",\"bytes_freed\":");
+    response->print((unsigned)bytes);
+    response->print("}");
+    request->send(response);
+    #endif
 }
 
 // POST /api/macros
@@ -493,12 +674,24 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             const char* label = bo["label"] | "";
             const char* action_s = bo["action"] | "none";
             const char* script = bo["script"] | "";
-            const char* icon_id = bo["icon_id"] | "";
+
+            MacroIconType iconType = MacroIconType::None;
+            const char* iconId = "";
+            const char* iconDisplay = "";
+            if (bo.containsKey("icon") && bo["icon"].is<JsonObject>()) {
+                JsonObject io = bo["icon"].as<JsonObject>();
+                iconType = macro_icon_type_from_string(io["type"] | "none");
+                iconId = io["id"] | "";
+                iconDisplay = io["display"] | "";
+            }
 
             strlcpy(next->buttons[s][b].label, label, sizeof(next->buttons[s][b].label));
             next->buttons[s][b].action = macro_action_from_string(action_s);
             strlcpy(next->buttons[s][b].script, script, sizeof(next->buttons[s][b].script));
-            strlcpy(next->buttons[s][b].icon_id, icon_id, sizeof(next->buttons[s][b].icon_id));
+
+            next->buttons[s][b].icon.type = iconType;
+            strlcpy(next->buttons[s][b].icon.id, iconId, sizeof(next->buttons[s][b].icon.id));
+            strlcpy(next->buttons[s][b].icon.display, iconDisplay, sizeof(next->buttons[s][b].icon.display));
 
             // Optional per-button appearance overrides.
             next->buttons[s][b].button_bg = bo.containsKey("button_bg") ? clamp_rgb24(bo["button_bg"] | 0) : MACROS_COLOR_UNSET;
@@ -508,7 +701,9 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             // Normalize: if action is none, clear script/icon to keep state tidy.
             if (next->buttons[s][b].action == MacroButtonAction::None) {
                 next->buttons[s][b].script[0] = '\0';
-                next->buttons[s][b].icon_id[0] = '\0';
+                next->buttons[s][b].icon.type = MacroIconType::None;
+                next->buttons[s][b].icon.id[0] = '\0';
+                next->buttons[s][b].icon.display[0] = '\0';
             }
         }
     }
@@ -1854,6 +2049,16 @@ void web_portal_init(DeviceConfig *config) {
     server->on("/api/config", HTTP_GET, handleGetConfig);
 
     // Icons API (for macro icon selector)
+    // NOTE: register more specific routes first; some AsyncWebServer URI matchers behave like prefix matches.
+    server->on("/api/icons/installed", HTTP_GET, handleGetInstalledIcons);
+    server->on("/api/icons/gc", HTTP_POST, handlePostIconGC);
+    server->on("/api/icons/install", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+            if (!portal_auth_gate(request)) return;
+        },
+        NULL,
+        handlePostIconInstall
+    );
     server->on("/api/icons", HTTP_GET, handleGetIcons);
 
     // Macros API

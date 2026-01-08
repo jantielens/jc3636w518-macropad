@@ -16,6 +16,7 @@
 
 #if HAS_DISPLAY && HAS_ICONS
 #include "../icon_registry.h"
+#include "../icon_store.h"
 #endif
 
 #if HAS_DISPLAY
@@ -954,8 +955,8 @@ void MacroPadScreen::refreshButtons(bool force) {
 
         // For navigation buttons, provide sensible default icons if none configured.
         // This avoids “blank” side buttons on templates like round_wide_sides_3.
-        const char* effectiveIconId = btnCfg->icon_id;
-        if (effectiveIconId[0] == '\0') {
+        const char* effectiveIconId = btnCfg->icon.id;
+        if (!effectiveIconId || effectiveIconId[0] == '\0' || btnCfg->icon.type == MacroIconType::None) {
             if (btnCfg->action == MacroButtonAction::NavPrevScreen) effectiveIconId = "chevron_left";
             else if (btnCfg->action == MacroButtonAction::NavNextScreen) effectiveIconId = "chevron_right";
         }
@@ -1014,9 +1015,9 @@ void MacroPadScreen::refreshButtons(bool force) {
 
         // If this is a navigation button and the label is a simple arrow, prefer icon-only
         // ONLY when the user explicitly configured an icon.
-        // If the icon comes from a fallback (icon_id empty), keep the label so the button
+        // If the icon comes from a fallback (no configured icon), keep the label so the button
         // doesn't become blank on targets where icons are hard to see.
-        const bool labelIsSimpleArrow = (btnCfg->icon_id[0] != '\0') && (
+        const bool labelIsSimpleArrow = (btnCfg->icon.type != MacroIconType::None) && (btnCfg->icon.id[0] != '\0') && (
             (btnCfg->label[0] == '<' && btnCfg->label[1] == '\0')
             || (btnCfg->label[0] == '>' && btnCfg->label[1] == '\0'));
         char labelBuf[32];
@@ -1049,7 +1050,7 @@ void MacroPadScreen::refreshButtons(bool force) {
                 lookupId = normalizedId;
             }
 
-            if (lookupId[0] != '\0' && icon_registry_lookup(lookupId, &ref) && ref.dsc) {
+            if (lookupId[0] != '\0' && icon_store_lookup(lookupId, &ref) && ref.dsc) {
                 lv_img_set_src(icons[i], ref.dsc);
                 lv_obj_set_style_opa(icons[i], LV_OPA_COVER, 0);
                 if (ref.kind == IconKind::Mask) {

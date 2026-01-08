@@ -152,6 +152,138 @@ body {
     min-height: 40px;
 }
 
+.macro-icon-summary-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.macro-icon-summary-row .macro-icon-btn {
+    width: auto;
+    min-width: 72px;
+    padding: 10px 14px;
+    font-size: 14px;
+    border-radius: 10px;
+    box-shadow: none;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.macro-icon-summary {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    border-radius: 12px;
+    border: 1px solid #e5e5ea;
+    background: #ffffff;
+    font-weight: 600;
+    color: #1d1d1f;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.macro-icon-body {
+    flex: 1;
+    overflow: auto;
+    padding-right: 2px;
+}
+
+.macro-icon-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    margin-top: 14px;
+}
+
+.macro-icon-actions .macro-icon-btn {
+    width: auto;
+    padding: 12px 16px;
+    font-size: 15px;
+    border-radius: 12px;
+}
+
+.macro-icon-toggle {
+    display: flex;
+    gap: 0;
+    padding: 4px;
+    border-radius: 14px;
+    background: #f5f5f7;
+    border: 1px solid #e5e5ea;
+}
+
+
+.macro-icon-toggle-btn {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: #1d1d1f;
+    font-weight: 700;
+    font-size: 14px;
+    padding: 12px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    flex: 1;
+}
+
+.macro-icon-toggle-btn[aria-selected="true"] {
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    border: 1px solid #d2d2d7;
+}
+
+.macro-icon-toggle-btn[aria-selected="false"] {
+    opacity: 0.75;
+}
+
+.macro-icon-toggle-btn:focus {
+    outline: 2px solid rgba(0, 122, 255, 0.35);
+    outline-offset: 2px;
+}
+
+.macro-icon-select-wrap {
+    border-radius: 14px;
+    border: 1px solid #e5e5ea;
+    background: #ffffff;
+    overflow: hidden;
+}
+
+.macro-icon-select {
+    width: 100%;
+    min-height: 240px;
+    border: 0;
+    outline: none;
+    padding: 10px 12px;
+    background: transparent;
+    font-size: 15px;
+}
+
+.macro-icon-search {
+    width: 100%;
+}
+
+.macro-icon-emoji-input {
+    font-size: 28px;
+    height: 56px;
+    text-align: center;
+    line-height: 1.1;
+}
+
+.macro-icon-license {
+    margin-top: 8px;
+}
+
+.macro-icon-hints {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 6px;
+}
+
 @media (min-width: 768px) {
     .grid-3col {
         grid-template-columns: repeat(3, 1fr);
@@ -732,6 +864,11 @@ footer {
 }
 
 /* Overlays */
+html.portal-overlay-open,
+body.portal-overlay-open {
+    overflow: hidden;
+}
+
 .reboot-overlay {
     position: fixed;
     top: 0;
@@ -756,6 +893,42 @@ footer {
     width: 100%;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
     animation: modalFadeIn 0.3s ease;
+}
+
+/* Icon picker dialog: override base modal sizing so it fills available space. */
+.reboot-modal.macro-icon-modal {
+    text-align: left;
+    max-width: 900px;
+    width: min(900px, calc(100vw - 48px));
+    height: min(820px, calc(100vh - 48px));
+    max-height: calc(100vh - 48px);
+    padding: 18px 18px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+@media (max-width: 520px) {
+    .reboot-overlay {
+        padding: 12px;
+    }
+
+    .reboot-modal.macro-icon-modal {
+        width: calc(100vw - 24px);
+        height: calc(100vh - 24px);
+        max-height: calc(100vh - 24px);
+        padding: 14px 14px;
+    }
+
+    .macro-icon-actions {
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-start;
+    }
+
+    .macro-icon-actions .macro-icon-btn {
+        width: 100%;
+    }
 }
 
 /* Reuse the reboot modal layout, but left-align the Ducky help content. */
@@ -826,6 +999,38 @@ footer {
     font-size: 14px;
     color: #1d1d1f;
     font-weight: 500;
+}
+
+.reboot-details {
+    margin: 12px auto 0;
+    max-width: 560px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(245, 245, 247, 0.95);
+    border: 1px solid #e5e5ea;
+    text-align: left;
+    color: #1d1d1f;
+    font-size: 13px;
+    line-height: 1.35;
+    max-height: 180px;
+    overflow: auto;
+}
+
+.reboot-details .step {
+    display: flex;
+    gap: 8px;
+    padding: 4px 0;
+    align-items: baseline;
+}
+
+.reboot-details .step .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgba(102, 126, 234, 0.85);
+    flex: 0 0 auto;
+    margin-top: 4px;
 }
 
 /* Form Loading Overlay */

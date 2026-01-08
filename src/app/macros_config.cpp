@@ -20,7 +20,7 @@
 #define KEY_BLOB  "b"
 
 #define MACROS_MAGIC 0x4D414352u // 'MACR'
-#define MACROS_VERSION 6
+#define MACROS_VERSION 7
 
 static Preferences prefs;
 
@@ -186,7 +186,10 @@ void macros_config_set_defaults(MacroConfig* cfg) {
             cfg->buttons[s][b].action = MacroButtonAction::None;
             cfg->buttons[s][b].label[0] = '\0';
             cfg->buttons[s][b].script[0] = '\0';
-            cfg->buttons[s][b].icon_id[0] = '\0';
+
+            cfg->buttons[s][b].icon.type = MacroIconType::None;
+            cfg->buttons[s][b].icon.id[0] = '\0';
+            cfg->buttons[s][b].icon.display[0] = '\0';
 
             cfg->buttons[s][b].button_bg = MACROS_COLOR_UNSET;
             cfg->buttons[s][b].icon_color = MACROS_COLOR_UNSET;
