@@ -163,6 +163,10 @@ public:
     
     // Screen selection by ID (thread-safe, returns true if found)
     bool showScreen(const char* screen_id);
+
+    // Return to previous runtime screen when available; otherwise go to default ("macro1").
+    // Returns true when a navigation was queued.
+    bool goBackOrDefault();
     
     // Get current screen ID (returns nullptr if splash or no screen)
     const char* getCurrentScreenId();

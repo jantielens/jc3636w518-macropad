@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-01-08
+
+### Added
+- Macro button action: Go to a specific screen (dropdown-driven).
+- Macro button action: Back (previous screen) with safe fallback to `macro1`.
+
+### Changed
+- BREAKING: `/api/macros` schema replaces `script` with `payload` and adds actions `nav_to` + `go_back`.
+
 ## [1.2.0] - 2026-01-08
 
 ### Added

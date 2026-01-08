@@ -48,6 +48,8 @@ static const char* actionToShortLabel(MacroButtonAction a) {
         case MacroButtonAction::SendKeys: return "Send";
         case MacroButtonAction::NavPrevScreen: return "Prev";
         case MacroButtonAction::NavNextScreen: return "Next";
+        case MacroButtonAction::NavToScreen: return "Go";
+        case MacroButtonAction::GoBack: return "Back";
         default: return "—";
     }
 }
@@ -751,14 +753,34 @@ void MacroPadScreen::handleButtonClick(uint8_t b) {
         return;
     }
 
+    if (btnCfg->action == MacroButtonAction::GoBack) {
+        // Best-effort: if no previous screen is tracked, fall back to Macro 1.
+        if (!displayMgr->goBackOrDefault()) {
+            displayMgr->showScreen("macro1");
+        }
+        return;
+    }
+
+    if (btnCfg->action == MacroButtonAction::NavToScreen) {
+        const char* target = btnCfg->payload;
+        if (!target || target[0] == '\0') {
+            displayMgr->showScreen("macro1");
+            return;
+        }
+        if (!displayMgr->showScreen(target)) {
+            displayMgr->showScreen("macro1");
+        }
+        return;
+    }
+
     if (btnCfg->action == MacroButtonAction::SendKeys) {
-        if (btnCfg->script[0] == '\0') {
-            Logger.logMessage("Macro", "Empty script; skipping");
+        if (btnCfg->payload[0] == '\0') {
+            Logger.logMessage("Macro", "Empty payload; skipping");
             return;
         }
 
         BleKeyboardManager* kb = getBleKeyboard();
-        ducky_execute(btnCfg->script, kb);
+        ducky_execute(btnCfg->payload, kb);
         return;
     }
 }

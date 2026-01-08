@@ -637,8 +637,8 @@ textarea {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
-/* Macros editor: keep the Keys Script box compact by default */
-#macro_script {
+/* Macros editor: keep the Send Keys box compact by default */
+#macro_payload {
     min-height: 80px;
 }
 
