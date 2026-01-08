@@ -5,7 +5,7 @@ This project supports a compiled icon library for macro buttons, designed to wor
 ## Goals
 
 - Use **one canonical icon set** across many layouts (round grids, tall side rails, etc.).
-- Keep storage reasonable: **mono “mask” icons** are stored compactly; **color icons** are optional.
+- Keep storage reasonable: **mono “mask” icons** are stored compactly in flash.
 - Allow the web portal to discover icons dynamically from firmware.
 
 ## Asset Types
@@ -17,49 +17,17 @@ This project supports a compiled icon library for macro buttons, designed to wor
 - Source PNGs live in:
   - `assets/icons_mono/*.png`
 
-### 2) Color icons (optional)
+### 2) Emoji icons (installed)
 
-- Stored as **true color + alpha** (`LV_IMG_CF_TRUE_COLOR_ALPHA`).
-- Rendered without recolor.
-- Source PNGs live in:
-  - `assets/icons_color/*.png`
+- Stored as **true color + alpha** (`LV_IMG_CF_TRUE_COLOR_ALPHA`) on FFat.
+- Installed at runtime by the web portal (Twemoji PNG → device blob).
+- Not compiled into firmware.
 
 All icon source PNGs are standardized as **64×64**.
 
-## Adding Color Icons from Twemoji
-
-This repo can include a curated set of Twemoji-based color icons in `assets/icons_color/`.
-
-Why this fits the current pipeline:
-- Twemoji provides per-emoji SVG assets.
-- The project already converts `assets/icons_color/*.png` → LVGL `LV_IMG_CF_TRUE_COLOR_ALPHA` at build time.
-
-### Fetch Tool
-
-- Script: `tools/fetch_twemoji.py`
-- Mapping file: `tools/twemoji_icons.txt`
-
-Run:
-
-```bash
-python3 tools/fetch_twemoji.py --map-file tools/twemoji_icons.txt \
-  --out-dir assets/icons_color --size 64
-```
-
-The mapping file format is:
-
-```text
-<icon_id> <emoji>
-```
-
-Guidelines:
-- Use unique `icon_id` values (the generated registry does not allow duplicate IDs across mono+color).
-- Keep `icon_id` C-identifier safe (letters/digits/underscore; not starting with a digit).
-- Consider a prefix like `emoji_` to avoid collisions with the mono Material Symbols IDs.
-
 ### License / Attribution
 
-Twemoji graphics are licensed under **CC BY 4.0** (attribution required). If you distribute firmware that embeds these icons, include attribution in project documentation.
+Twemoji graphics are licensed under **CC BY 4.0** (attribution required). Emoji icons are sourced by the portal from Twemoji.
 
 ## Build Pipeline
 
@@ -67,13 +35,11 @@ The build script generates LVGL C arrays and a registry when the target board en
 
 - Generator: `tools/png2lvgl_assets.py`
   - Mono: emits `LV_IMG_CF_ALPHA_8BIT`
-  - Color: emits `LV_IMG_CF_TRUE_COLOR_ALPHA`
 - Registry generator: `tools/generate_icon_registry.py`
 
 Outputs (auto-generated, not committed):
 
 - `src/app/icon_assets_mono.{h,cpp}`
-- `src/app/icon_assets_color.{h,cpp}`
 - `src/app/icon_registry.{h,cpp}`
 
 Board gating:
@@ -82,9 +48,11 @@ Board gating:
 
 ## Runtime Lookup
 
-Firmware resolves the configured `icon_id` (string) to an LVGL image descriptor through the generated registry:
+Firmware resolves icons through the icon store:
 
-- `icon_registry_lookup(icon_id, &ref)` → `ref.dsc` + `ref.kind`
+- `icon_store_lookup(icon_id, &ref)` → `ref.dsc` + `ref.kind`
+
+This prefers compiled mono icons first, then falls back to FFat-installed emoji/user icons.
 
 `IconKind`:
 

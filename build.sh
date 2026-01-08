@@ -57,9 +57,9 @@ board_has_icons() {
 should_generate_icon_assets() {
     local target_board="$1"
 
-    # Require icon asset folders to exist. (They may be empty; we still generate
+    # Require mono icon asset folder to exist. (It may be empty; we still generate
     # empty/stable output files so includes remain predictable.)
-    if [[ ! -d "$SCRIPT_DIR/assets/icons_mono" && ! -d "$SCRIPT_DIR/assets/icons_color" ]]; then
+    if [[ ! -d "$SCRIPT_DIR/assets/icons_mono" ]]; then
         return 1
     fi
 
@@ -253,18 +253,8 @@ if should_generate_icon_assets "$TARGET_BOARD"; then
         --size 64 \
         --resize
 
-    python3 "$SCRIPT_DIR/tools/png2lvgl_assets.py" \
-        "$SCRIPT_DIR/assets/icons_color" \
-        "$SCRIPT_DIR/src/app/icon_assets_color.cpp" \
-        "$SCRIPT_DIR/src/app/icon_assets_color.h" \
-        --prefix "ic_" \
-        --format "true_color_alpha" \
-        --size 64 \
-        --resize
-
     python3 "$SCRIPT_DIR/tools/generate_icon_registry.py" \
         --mono-h "$SCRIPT_DIR/src/app/icon_assets_mono.h" \
-        --color-h "$SCRIPT_DIR/src/app/icon_assets_color.h" \
         --out-h "$SCRIPT_DIR/src/app/icon_registry.h" \
         --out-cpp "$SCRIPT_DIR/src/app/icon_registry.cpp"
 

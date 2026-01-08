@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a tiny icon registry for compiled LVGL icon assets.
+"""Generate a tiny icon registry for compiled LVGL mono (mask) icon assets.
 
 This scans generated icon asset headers for declarations like:
   extern const lv_img_dsc_t ic_volume_up;
@@ -8,13 +8,15 @@ Then emits:
   - src/app/icon_registry.h
   - src/app/icon_registry.cpp
 
-so firmware can resolve MacroConfig.icon_id (e.g. "volume_up") to the compiled
-symbol (&ic_volume_up) and know whether it's a monochrome mask or full-color icon.
+so firmware can resolve a compiled icon_id (e.g. "volume_up") to the compiled
+symbol (&ic_volume_up).
+
+Note: full-color icons are supported via FFat-installed blobs (icon_store), not
+via compiled assets.
 
 Usage:
   python3 tools/generate_icon_registry.py \
     --mono-h src/app/icon_assets_mono.h \
-    --color-h src/app/icon_assets_color.h \
     --out-h  src/app/icon_registry.h \
     --out-cpp src/app/icon_registry.cpp
 
@@ -30,7 +32,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 
 _DECL_RE = re.compile(r"^\s*extern\s+const\s+lv_img_dsc_t\s+(?P<sym>[A-Za-z_][A-Za-z0-9_]*)\s*;\s*$")
@@ -61,18 +63,6 @@ def _read_symbols(path: str, expected_prefix: str) -> List[IconSym]:
     # Deterministic order
     out.sort(key=lambda s: s.icon_id)
     return out
-
-
-def _dedupe_check(mono: List[IconSym], color: List[IconSym]) -> None:
-    mono_ids = {s.icon_id for s in mono}
-    color_ids = {s.icon_id for s in color}
-    dup = sorted(mono_ids.intersection(color_ids))
-    if dup:
-        raise SystemExit(
-            "ERROR: Duplicate icon_id found in both mono and color sets.\n"
-            "Each icon_id must exist in only one set.\n\n"
-            + "\n".join(f"  - {d}" for d in dup)
-        )
 
 
 def _write_header(out_h: str) -> None:
@@ -118,7 +108,7 @@ def _write_header(out_h: str) -> None:
         f.write(f"#endif // {guard}\n")
 
 
-def _write_cpp(out_cpp: str, out_h_basename: str, mono: List[IconSym], color: List[IconSym]) -> None:
+def _write_cpp(out_cpp: str, out_h_basename: str, mono: List[IconSym]) -> None:
     with open(out_cpp, "w", encoding="utf-8") as f:
         f.write("/*\n")
         f.write(" * Auto-generated icon registry\n")
@@ -129,8 +119,7 @@ def _write_cpp(out_cpp: str, out_h_basename: str, mono: List[IconSym], color: Li
         f.write("\n#if HAS_DISPLAY && HAS_ICONS\n\n")
         f.write("#include <string.h>\n\n")
         f.write("// Include generated icon declarations\n")
-        f.write('#include "icon_assets_mono.h"\n')
-        f.write('#include "icon_assets_color.h"\n\n')
+        f.write('#include "icon_assets_mono.h"\n\n')
 
         f.write("struct IconEntry {\n")
         f.write("  const char* id;\n")
@@ -141,8 +130,6 @@ def _write_cpp(out_cpp: str, out_h_basename: str, mono: List[IconSym], color: Li
         f.write("static const IconEntry kIcons[] = {\n")
         for s in mono:
             f.write(f'  {{"{s.icon_id}", &{s.symbol}, IconKind::Mask}},\n')
-        for s in color:
-            f.write(f'  {{"{s.icon_id}", &{s.symbol}, IconKind::Color}},\n')
         f.write("};\n\n")
 
         f.write("bool icon_registry_lookup(const char* icon_id, IconRef* out) {\n")
@@ -182,7 +169,6 @@ def _write_cpp(out_cpp: str, out_h_basename: str, mono: List[IconSym], color: Li
 def main() -> int:
     ap = argparse.ArgumentParser(description="Generate icon registry source files")
     ap.add_argument("--mono-h", required=True, help="Generated mono icon header (icon_assets_mono.h)")
-    ap.add_argument("--color-h", required=True, help="Generated color icon header (icon_assets_color.h)")
     ap.add_argument("--out-h", required=True, help="Output registry header path")
     ap.add_argument("--out-cpp", required=True, help="Output registry cpp path")
     ap.add_argument("--symbol-prefix", default="ic_", help="Icon symbol prefix (default: ic_)")
@@ -190,16 +176,15 @@ def main() -> int:
     args = ap.parse_args()
 
     mono = _read_symbols(args.mono_h, expected_prefix=args.symbol_prefix)
-    color = _read_symbols(args.color_h, expected_prefix=args.symbol_prefix)
-    _dedupe_check(mono, color)
+    color: List[IconSym] = []
 
     os.makedirs(os.path.dirname(args.out_h) or ".", exist_ok=True)
     os.makedirs(os.path.dirname(args.out_cpp) or ".", exist_ok=True)
 
     _write_header(args.out_h)
-    _write_cpp(args.out_cpp, os.path.basename(args.out_h), mono, color)
+    _write_cpp(args.out_cpp, os.path.basename(args.out_h), mono)
 
-    print(f"✓ Icon registry: mono={len(mono)} color={len(color)}")
+    print(f"✓ Icon registry: mono={len(mono)}")
     print(f"✓ Wrote {args.out_h}")
     print(f"✓ Wrote {args.out_cpp}")
 
