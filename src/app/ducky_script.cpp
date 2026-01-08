@@ -180,7 +180,7 @@ bool ducky_execute(const char* script, BleKeyboardManager* keyboard) {
     }
 
     // Copy into a scratch buffer so we can split lines in-place.
-    // Macro strings are bounded by MACROS_SCRIPT_MAX_LEN (256), but keep a little headroom.
+    // Macro payload strings are bounded by MACROS_PAYLOAD_MAX_LEN (256), but keep a little headroom.
     char buf[384];
     strlcpy(buf, script, sizeof(buf));
 

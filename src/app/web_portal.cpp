@@ -201,6 +201,8 @@ static const char* macro_action_to_string(MacroButtonAction a) {
         case MacroButtonAction::SendKeys: return "send_keys";
         case MacroButtonAction::NavPrevScreen: return "nav_prev";
         case MacroButtonAction::NavNextScreen: return "nav_next";
+        case MacroButtonAction::NavToScreen: return "nav_to";
+        case MacroButtonAction::GoBack: return "go_back";
         default: return "none";
     }
 }
@@ -230,6 +232,8 @@ static MacroButtonAction macro_action_from_string(const char* s) {
     if (strcasecmp(s, "send_keys") == 0) return MacroButtonAction::SendKeys;
     if (strcasecmp(s, "nav_prev") == 0) return MacroButtonAction::NavPrevScreen;
     if (strcasecmp(s, "nav_next") == 0) return MacroButtonAction::NavNextScreen;
+    if (strcasecmp(s, "nav_to") == 0) return MacroButtonAction::NavToScreen;
+    if (strcasecmp(s, "go_back") == 0) return MacroButtonAction::GoBack;
     return MacroButtonAction::None;
 }
 
@@ -254,7 +258,7 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
-    response->print("{\"success\":true,\"version\":7,\"buttons_per_screen\":");
+    response->print("{\"success\":true,\"version\":8,\"buttons_per_screen\":");
     response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
 
     // Global defaults (always present)
@@ -326,7 +330,7 @@ void handleGetMacros(AsyncWebServerRequest *request) {
             StaticJsonDocument<512> item;
             item["label"] = btn->label;
             item["action"] = macro_action_to_string(btn->action);
-            item["script"] = btn->script;
+            item["payload"] = btn->payload;
 
             JsonObject icon = item.createNestedObject("icon");
             icon["type"] = macro_icon_type_to_string(btn->icon.type);
@@ -673,7 +677,7 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
 
             const char* label = bo["label"] | "";
             const char* action_s = bo["action"] | "none";
-            const char* script = bo["script"] | "";
+            const char* payload = bo["payload"] | "";
 
             MacroIconType iconType = MacroIconType::None;
             const char* iconId = "";
@@ -687,7 +691,7 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
 
             strlcpy(next->buttons[s][b].label, label, sizeof(next->buttons[s][b].label));
             next->buttons[s][b].action = macro_action_from_string(action_s);
-            strlcpy(next->buttons[s][b].script, script, sizeof(next->buttons[s][b].script));
+            strlcpy(next->buttons[s][b].payload, payload, sizeof(next->buttons[s][b].payload));
 
             next->buttons[s][b].icon.type = iconType;
             strlcpy(next->buttons[s][b].icon.id, iconId, sizeof(next->buttons[s][b].icon.id));
@@ -698,12 +702,17 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             next->buttons[s][b].icon_color = bo.containsKey("icon_color") ? clamp_rgb24(bo["icon_color"] | 0) : MACROS_COLOR_UNSET;
             next->buttons[s][b].label_color = bo.containsKey("label_color") ? clamp_rgb24(bo["label_color"] | 0) : MACROS_COLOR_UNSET;
 
-            // Normalize: if action is none, clear script/icon to keep state tidy.
+            // Normalize: if action is none, clear payload/icon to keep state tidy.
             if (next->buttons[s][b].action == MacroButtonAction::None) {
-                next->buttons[s][b].script[0] = '\0';
+                next->buttons[s][b].payload[0] = '\0';
                 next->buttons[s][b].icon.type = MacroIconType::None;
                 next->buttons[s][b].icon.id[0] = '\0';
                 next->buttons[s][b].icon.display[0] = '\0';
+            }
+
+            // For non-payload actions, ignore stored payload.
+            if (next->buttons[s][b].action != MacroButtonAction::SendKeys && next->buttons[s][b].action != MacroButtonAction::NavToScreen) {
+                next->buttons[s][b].payload[0] = '\0';
             }
         }
     }

@@ -53,7 +53,7 @@ let macrosSelectorLayout = MACROS_SELECTOR_LAYOUT_DEFAULT;
 
 // Keep in sync with src/app/macros_config.h (char arrays include NUL terminator).
 const MACROS_LABEL_MAX = 15;
-const MACROS_SCRIPT_MAX = 255;
+const MACROS_PAYLOAD_MAX = 255;
 const MACROS_ICON_ID_MAX = 31;
 // UTF-8 bytes (not code points). Firmware uses 64 bytes including NUL.
 const MACROS_ICON_DISPLAY_MAX = 63;
@@ -69,7 +69,7 @@ const MACROS_DEFAULT_COLORS = {
     label_color: 0xFFFFFF,
 };
 
-let macrosPayloadCache = null; // { defaults:{...}, screens: [ { template, screen_bg?, buttons:[{label, action, script, icon:{type,id,display}, button_bg?, icon_color?, label_color?}, ...] }, ... ] }
+let macrosPayloadCache = null; // { defaults:{...}, screens: [ { template, screen_bg?, buttons:[{label, action, payload, icon:{type,id,display}, button_bg?, icon_color?, label_color?}, ...] }, ... ] }
 let macrosTemplatesCache = []; // [{id,name,selector_layout}, ...]
 let macrosSelectedScreen = 0; // 0-based
 let macrosSelectedButton = 0; // 0-based
@@ -455,7 +455,7 @@ function macrosSetDirty(dirty) {
 }
 
 function macrosCreateEmptyButton() {
-    return { label: '', action: 'none', script: '', icon: { type: 'none', id: '', display: '' } };
+    return { label: '', action: 'none', payload: '', icon: { type: 'none', id: '', display: '' } };
 }
 
 function macrosCreateEmptyPayload() {
@@ -468,6 +468,12 @@ function macrosCreateEmptyPayload() {
         payload.screens.push({ template: MACROS_DEFAULT_TEMPLATE_ID, buttons });
     }
     return payload;
+}
+
+function macrosIsValidScreenId(id) {
+    const key = (id || '').toString();
+    if (!key) return false;
+    return macrosGetAvailableScreens().some(s => s.id === key);
 }
 
 function macrosNormalizePayload(payload) {
@@ -525,7 +531,7 @@ function macrosNormalizePayload(payload) {
             const next = {
                 label: (btn.label || ''),
                 action: (btn.action || 'none'),
-                script: (btn.script || ''),
+                payload: (btn.payload || ''),
                 icon: normalizeIcon(btn.icon || btn.icon_id),
             };
 
@@ -657,8 +663,32 @@ function macrosRenderIconSummary() {
     clearBtn.disabled = !enabled || (icon && icon.type === 'none');
 }
 
-function macrosActionSupportsScript(action) {
+function macrosActionUsesTextPayload(action) {
     return action === 'send_keys';
+}
+
+function macrosActionUsesScreenPayload(action) {
+    return action === 'nav_to';
+}
+
+function macrosActionSupportsPayload(action) {
+    return macrosActionUsesTextPayload(action) || macrosActionUsesScreenPayload(action);
+}
+
+function macrosGetAvailableScreens() {
+    const screens = deviceInfoCache && Array.isArray(deviceInfoCache.available_screens)
+        ? deviceInfoCache.available_screens
+        : [];
+    return screens.filter(s => s && typeof s.id === 'string' && s.id.length > 0);
+}
+
+function macrosScreenNameForId(id) {
+    const key = (id || '').toString();
+    if (!key) return '';
+    for (const s of macrosGetAvailableScreens()) {
+        if (s.id === key) return (s.name || s.id).toString();
+    }
+    return '';
 }
 
 function macrosGetSelectedButton() {
@@ -674,11 +704,11 @@ function macrosSlotTitle(slotIndex) {
     return `#${slot}`;
 }
 
-function macrosUpdateScriptCharCounter() {
-    const charsEl = document.getElementById('macro_script_chars');
+function macrosUpdatePayloadCharCounter() {
+    const charsEl = document.getElementById('macro_payload_chars');
     if (!charsEl) return;
     const cfg = macrosGetSelectedButton();
-    charsEl.textContent = cfg && cfg.script ? String(cfg.script.length) : '0';
+    charsEl.textContent = cfg && cfg.payload ? String(cfg.payload.length) : '0';
 }
 
 function macrosRenderScreenSelect() {
@@ -773,11 +803,17 @@ function macrosRenderButtonGrid() {
         } else if (action === 'none') {
             subtitle.textContent = '—';
         } else if (action === 'send_keys') {
-            subtitle.textContent = 'Keys Script';
+            subtitle.textContent = 'Send Keys';
         } else if (action === 'nav_prev') {
-            subtitle.textContent = 'Previous';
+            subtitle.textContent = 'Prev Macro';
         } else if (action === 'nav_next') {
-            subtitle.textContent = 'Next';
+            subtitle.textContent = 'Next Macro';
+        } else if (action === 'nav_to') {
+            const target = (cfg && cfg.payload) ? String(cfg.payload) : '';
+            const name = macrosScreenNameForId(target);
+            subtitle.textContent = name ? `Go → ${name}` : (target ? `Go → ${target}` : 'Go → (select)');
+        } else if (action === 'go_back') {
+            subtitle.textContent = 'Back';
         } else {
             subtitle.textContent = action;
         }
@@ -801,34 +837,77 @@ function macrosRenderEditorFields() {
     const cfg = macrosGetSelectedButton();
     const labelEl = document.getElementById('macro_label');
     const actionEl = document.getElementById('macro_action');
-    const scriptEl = document.getElementById('macro_script');
-    const scriptGroupEl = document.getElementById('macro_script_group');
+    const payloadEl = document.getElementById('macro_payload');
+    const payloadGroupEl = document.getElementById('macro_payload_group');
+    const navGroupEl = document.getElementById('macro_nav_to_group');
+    const navSelectEl = document.getElementById('macro_nav_target');
 
     if (!cfg) {
         if (labelEl) labelEl.value = '';
         if (actionEl) actionEl.value = 'none';
-        if (scriptEl) scriptEl.value = '';
-        if (scriptGroupEl) scriptGroupEl.style.display = 'none';
-        macrosUpdateScriptCharCounter();
+        if (payloadEl) payloadEl.value = '';
+        if (payloadGroupEl) payloadGroupEl.style.display = 'none';
+        if (navGroupEl) navGroupEl.style.display = 'none';
+        macrosUpdatePayloadCharCounter();
         macrosRenderIconSummary();
         return;
     }
 
     if (labelEl) labelEl.value = cfg.label || '';
     if (actionEl) actionEl.value = cfg.action || 'none';
-    if (scriptEl) scriptEl.value = cfg.script || '';
+    if (payloadEl) payloadEl.value = cfg.payload || '';
 
     const action = (cfg.action || 'none');
-    const scriptEnabled = macrosActionSupportsScript(action);
+    const textEnabled = macrosActionUsesTextPayload(action);
+    const navEnabled = macrosActionUsesScreenPayload(action);
 
-    // Script UI: only show it for Keys Script action.
-    if (scriptGroupEl) scriptGroupEl.style.display = scriptEnabled ? 'block' : 'none';
-    if (scriptEl) {
-        scriptEl.disabled = false;
-        if (!scriptEnabled) scriptEl.value = '';
+    // Payload textarea: only show it for Send Keys.
+    if (payloadGroupEl) payloadGroupEl.style.display = textEnabled ? 'block' : 'none';
+    if (payloadEl) {
+        payloadEl.disabled = false;
+        if (!textEnabled) payloadEl.value = '';
     }
 
-    macrosUpdateScriptCharCounter();
+    // Screen dropdown: only show it for Go to Screen.
+    if (navGroupEl) navGroupEl.style.display = navEnabled ? 'block' : 'none';
+    if (navSelectEl) {
+        if (!navEnabled) {
+            navSelectEl.innerHTML = '';
+        } else {
+            const screens = macrosGetAvailableScreens();
+            navSelectEl.innerHTML = '';
+
+            if (screens.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '(loading screens…)';
+                navSelectEl.appendChild(opt);
+                navSelectEl.disabled = true;
+            } else {
+                navSelectEl.disabled = false;
+                for (const s of screens) {
+                    const opt = document.createElement('option');
+                    opt.value = s.id;
+                    opt.textContent = (s.name || s.id).toString();
+                    navSelectEl.appendChild(opt);
+                }
+
+                const current = (cfg.payload || '').toString();
+                const exists = screens.some(s => s.id === current);
+                if (exists) {
+                    navSelectEl.value = current;
+                } else {
+                    // Prefer macro1 if available; otherwise pick first.
+                    const prefer = screens.some(s => s.id === 'macro1') ? 'macro1' : screens[0].id;
+                    navSelectEl.value = prefer;
+                    cfg.payload = prefer;
+                    macrosSetDirty(true);
+                }
+            }
+        }
+    }
+
+    macrosUpdatePayloadCharCounter();
 
     if (action === 'none') {
         macrosClearIcon(cfg);
@@ -1007,7 +1086,7 @@ function macrosBindEditorEvents() {
             cfg.action = actionEl.value || 'none';
 
             // Keep stored data tidy.
-            if (!macrosActionSupportsScript(cfg.action)) cfg.script = '';
+            if (!macrosActionSupportsPayload(cfg.action)) cfg.payload = '';
             if (cfg.action === 'none') macrosClearIcon(cfg);
 
             macrosSetDirty(true);
@@ -1015,23 +1094,34 @@ function macrosBindEditorEvents() {
         });
     }
 
-    const scriptEl = document.getElementById('macro_script');
-    if (scriptEl) {
+    const payloadEl = document.getElementById('macro_payload');
+    if (payloadEl) {
         // Guard against odd captive-browser/mobile behavior that sometimes treats Enter as form-submit.
         // We still want newlines in the textarea, so do NOT preventDefault.
-        scriptEl.addEventListener('keydown', (e) => {
+        payloadEl.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.stopPropagation();
             }
         });
 
-        scriptEl.addEventListener('input', () => {
+        payloadEl.addEventListener('input', () => {
             const cfg = macrosGetSelectedButton();
             if (!cfg) return;
-            cfg.script = macrosClampString(scriptEl.value, MACROS_SCRIPT_MAX);
-            if (scriptEl.value !== cfg.script) scriptEl.value = cfg.script;
+            cfg.payload = macrosClampString(payloadEl.value, MACROS_PAYLOAD_MAX);
+            if (payloadEl.value !== cfg.payload) payloadEl.value = cfg.payload;
             macrosSetDirty(true);
-            macrosUpdateScriptCharCounter();
+            macrosUpdatePayloadCharCounter();
+        });
+    }
+
+    const navSelectEl = document.getElementById('macro_nav_target');
+    if (navSelectEl) {
+        navSelectEl.addEventListener('change', () => {
+            const cfg = macrosGetSelectedButton();
+            if (!cfg) return;
+            cfg.payload = (navSelectEl.value || '').toString();
+            macrosSetDirty(true);
+            macrosRenderButtonGrid();
         });
     }
 
@@ -1401,14 +1491,22 @@ async function saveMacros(options = {}) {
             const btn = payload.screens[s].buttons[b];
             btn.label = macrosClampString(btn.label, MACROS_LABEL_MAX);
             btn.action = (btn.action || 'none');
-            btn.script = macrosClampString(btn.script, MACROS_SCRIPT_MAX);
+            btn.payload = macrosClampString(btn.payload, MACROS_PAYLOAD_MAX);
             macrosEnsureIconObject(btn);
             btn.icon.type = (btn.icon.type || 'none').toString();
             if (!['none', 'builtin', 'emoji', 'asset'].includes(btn.icon.type)) btn.icon.type = 'none';
             btn.icon.id = macrosClampString(btn.icon.id, MACROS_ICON_ID_MAX);
             btn.icon.display = macrosClampUtf8Bytes(btn.icon.display, MACROS_ICON_DISPLAY_MAX);
 
-            if (!macrosActionSupportsScript(btn.action)) btn.script = '';
+            if (!macrosActionSupportsPayload(btn.action)) btn.payload = '';
+            if (btn.action === 'nav_to') {
+                // Dropdown-only: coerce to a valid screen id when possible.
+                // If the screen list isn't available yet, keep the payload as-is.
+                const screens = macrosGetAvailableScreens();
+                if (screens.length > 0 && !macrosIsValidScreenId(btn.payload)) {
+                    btn.payload = screens.some(s2 => s2.id === 'macro1') ? 'macro1' : screens[0].id;
+                }
+            }
             if (btn.action === 'none') {
                 btn.icon.type = 'none';
                 btn.icon.id = '';

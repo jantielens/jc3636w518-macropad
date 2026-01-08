@@ -537,6 +537,31 @@ bool DisplayManager::showScreen(const char* screen_id) {
     return false;
 }
 
+bool DisplayManager::goBackOrDefault() {
+    // Do not treat splash or unregistered screens as valid targets.
+    Screen* target = previousScreen;
+    if (!target || target == currentScreen) {
+        return showScreen("macro1");
+    }
+
+    // Only allow navigating back to registered runtime screens.
+    bool registered = false;
+    for (size_t i = 0; i < screenCount; i++) {
+        if (availableScreens[i].instance == target) {
+            registered = true;
+            break;
+        }
+    }
+
+    if (!registered) {
+        return showScreen("macro1");
+    }
+
+    pendingScreen = target;
+    Logger.logMessage("Display", "Queued go-back to previous screen");
+    return true;
+}
+
 const char* DisplayManager::getCurrentScreenId() {
     // Return ID of current screen (nullptr if splash or unknown)
     for (size_t i = 0; i < screenCount; i++) {
