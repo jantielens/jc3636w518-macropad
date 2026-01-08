@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-01-08
+
+### Added
+- Macro button icons with scalable rendering.
+- Portal Macros editor support for configurable colors (screen/button backgrounds, icon tint, label color).
+- New macro layout template: `round_pie_8`.
+- FFat-backed icon store for on-demand installed icons (emoji + user icons) with `/api/icons/installed` and `/api/icons/install`.
+- Automatic garbage collection of unused installed icons after saving macros (`POST /api/icons/gc`).
+
+### Changed
+- Refactor MacroPad templates into layout classes.
+- Replace free-text icon id input with a portal icon picker (Mono icons vs Emoji tabs).
+- Drop compiled color icon pipeline; keep mono compiled icons + FFat-installed emoji.
+
+### Fixed
+- Fix boot crash when USB CDC is not connected.
+- Fix installed emoji detection (route registration order + correct JSON output).
+- Improve button press feedback and enforce a minimum hold time.
+
 ## [1.1.0] - 2026-01-06
 
 ### Added
