@@ -30,6 +30,7 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     pendingScreen(nullptr),
     infoScreen(cfg, this),
     testScreen(this),
+    errorScreen(this),
 #if HAS_IMAGE_API
     directImageScreen(this),
 #endif
@@ -43,6 +44,10 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     bleKeyboard(nullptr),
     pendingSplashStatus{0},
     pendingSplashStatusPending(false) {
+    mqttManager = nullptr;
+    errorTitle[0] = '\0';
+    errorMessage[0] = '\0';
+
     // Instantiate selected display driver
     #if DISPLAY_DRIVER == DISPLAY_DRIVER_TFT_ESPI
     driver = new TFT_eSPI_Driver();
@@ -76,6 +81,7 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     // Existing utility screens
     availableScreens[idx++] = {"info", "Info Screen", &infoScreen};
     availableScreens[idx++] = {"test", "Test Screen", &testScreen};
+    availableScreens[idx++] = {"error", "Error", &errorScreen};
 
     #if HAS_IMAGE_API
     // Optional LVGL image screen (JPEG -> RGB565 -> lv_img).
@@ -111,6 +117,7 @@ DisplayManager::~DisplayManager() {
     }
     infoScreen.destroy();
     testScreen.destroy();
+    errorScreen.destroy();
     
     #if HAS_IMAGE_API
     directImageScreen.destroy();
@@ -141,6 +148,16 @@ DisplayManager::~DisplayManager() {
 void DisplayManager::setMacroRuntime(MacroConfig* cfg, BleKeyboardManager* keyboard) {
     macroConfig = cfg;
     bleKeyboard = keyboard;
+}
+
+void DisplayManager::showError(const char* title, const char* message) {
+    // Persist content so callers can pass temporary buffers.
+    strlcpy(errorTitle, title ? title : "", sizeof(errorTitle));
+    strlcpy(errorMessage, message ? message : "", sizeof(errorMessage));
+
+    // Ensure the error screen shows the current text when it becomes active.
+    pendingScreen = &errorScreen;
+    Logger.logMessage("Display", "Queued switch to ErrorScreen");
 }
 
 const char* DisplayManager::getScreenIdForInstance(const Screen* screen) const {
@@ -270,6 +287,11 @@ void DisplayManager::lvglTask(void* pvParameter) {
             mgr->previousScreen = mgr->currentScreen;
             #endif
             mgr->currentScreen = target;
+
+            // If switching to ErrorScreen, apply the latest title/message before showing.
+            if (mgr->currentScreen == &mgr->errorScreen) {
+                mgr->errorScreen.setError(mgr->errorTitle, mgr->errorMessage);
+            }
             mgr->currentScreen->show();
             mgr->pendingScreen = nullptr;
             const char* appliedId = mgr->getScreenIdForInstance(mgr->currentScreen);
@@ -415,6 +437,7 @@ void DisplayManager::init() {
     splashScreen.create();
     infoScreen.create();
     testScreen.create();
+    errorScreen.create();
     #if HAS_IMAGE_API
     #if LV_USE_IMG
     lvglImageScreen.create();
@@ -641,6 +664,18 @@ void display_manager_set_backlight_brightness(uint8_t brightness) {
 void display_manager_set_macro_runtime(MacroConfig* cfg, BleKeyboardManager* keyboard) {
     if (displayManager) {
         displayManager->setMacroRuntime(cfg, keyboard);
+    }
+}
+
+void display_manager_show_error(const char* title, const char* message) {
+    if (displayManager) {
+        displayManager->showError(title, message);
+    }
+}
+
+void display_manager_set_mqtt_manager(MqttManager* mqtt) {
+    if (displayManager) {
+        displayManager->setMqttManager(mqtt);
     }
 }
 

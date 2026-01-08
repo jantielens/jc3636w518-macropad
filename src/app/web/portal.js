@@ -54,6 +54,7 @@ let macrosSelectorLayout = MACROS_SELECTOR_LAYOUT_DEFAULT;
 // Keep in sync with src/app/macros_config.h (char arrays include NUL terminator).
 const MACROS_LABEL_MAX = 15;
 const MACROS_PAYLOAD_MAX = 255;
+const MACROS_MQTT_TOPIC_MAX = 127;
 const MACROS_ICON_ID_MAX = 31;
 // UTF-8 bytes (not code points). Firmware uses 64 bytes including NUL.
 const MACROS_ICON_DISPLAY_MAX = 63;
@@ -69,7 +70,7 @@ const MACROS_DEFAULT_COLORS = {
     label_color: 0xFFFFFF,
 };
 
-let macrosPayloadCache = null; // { defaults:{...}, screens: [ { template, screen_bg?, buttons:[{label, action, payload, icon:{type,id,display}, button_bg?, icon_color?, label_color?}, ...] }, ... ] }
+let macrosPayloadCache = null; // { defaults:{...}, screens: [ { template, screen_bg?, buttons:[{label, action, payload, mqtt_topic, icon:{type,id,display}, button_bg?, icon_color?, label_color?}, ...] }, ... ] }
 let macrosTemplatesCache = []; // [{id,name,selector_layout}, ...]
 let macrosSelectedScreen = 0; // 0-based
 let macrosSelectedButton = 0; // 0-based
@@ -455,7 +456,7 @@ function macrosSetDirty(dirty) {
 }
 
 function macrosCreateEmptyButton() {
-    return { label: '', action: 'none', payload: '', icon: { type: 'none', id: '', display: '' } };
+    return { label: '', action: 'none', payload: '', mqtt_topic: '', icon: { type: 'none', id: '', display: '' } };
 }
 
 function macrosCreateEmptyPayload() {
@@ -532,6 +533,7 @@ function macrosNormalizePayload(payload) {
                 label: (btn.label || ''),
                 action: (btn.action || 'none'),
                 payload: (btn.payload || ''),
+                mqtt_topic: (btn.mqtt_topic || ''),
                 icon: normalizeIcon(btn.icon || btn.icon_id),
             };
 
@@ -545,6 +547,10 @@ function macrosNormalizePayload(payload) {
     }
 
     return out;
+}
+
+function macrosActionIsMqttSend(action) {
+    return action === 'mqtt_send';
 }
 
 function macrosRenderTemplateSelect() {
@@ -664,7 +670,7 @@ function macrosRenderIconSummary() {
 }
 
 function macrosActionUsesTextPayload(action) {
-    return action === 'send_keys';
+    return action === 'send_keys' || action === 'mqtt_send';
 }
 
 function macrosActionUsesScreenPayload(action) {
@@ -706,9 +712,9 @@ function macrosSlotTitle(slotIndex) {
 
 function macrosUpdatePayloadCharCounter() {
     const charsEl = document.getElementById('macro_payload_chars');
-    if (!charsEl) return;
-    const cfg = macrosGetSelectedButton();
-    charsEl.textContent = cfg && cfg.payload ? String(cfg.payload.length) : '0';
+    const payloadEl = document.getElementById('macro_payload');
+    if (!charsEl || !payloadEl) return;
+    charsEl.textContent = String((payloadEl.value || '').length);
 }
 
 function macrosRenderScreenSelect() {
@@ -812,6 +818,9 @@ function macrosRenderButtonGrid() {
             const target = (cfg && cfg.payload) ? String(cfg.payload) : '';
             const name = macrosScreenNameForId(target);
             subtitle.textContent = name ? `Go → ${name}` : (target ? `Go → ${target}` : 'Go → (select)');
+        } else if (action === 'mqtt_send') {
+            const topic = (cfg && cfg.mqtt_topic) ? String(cfg.mqtt_topic) : '';
+            subtitle.textContent = topic ? `MQTT → ${topic}` : 'MQTT → (set topic)';
         } else if (action === 'go_back') {
             subtitle.textContent = 'Back';
         } else {
@@ -837,16 +846,23 @@ function macrosRenderEditorFields() {
     const cfg = macrosGetSelectedButton();
     const labelEl = document.getElementById('macro_label');
     const actionEl = document.getElementById('macro_action');
+    const mqttTopicEl = document.getElementById('macro_mqtt_topic');
+    const mqttTopicGroupEl = document.getElementById('macro_mqtt_topic_group');
     const payloadEl = document.getElementById('macro_payload');
     const payloadGroupEl = document.getElementById('macro_payload_group');
     const navGroupEl = document.getElementById('macro_nav_to_group');
     const navSelectEl = document.getElementById('macro_nav_target');
+    const payloadLabelEl = document.getElementById('macro_payload_label');
+    const payloadHelpEl = document.getElementById('macro_payload_help');
+    const duckyHelpBtn = document.getElementById('ducky_help_open');
 
     if (!cfg) {
         if (labelEl) labelEl.value = '';
         if (actionEl) actionEl.value = 'none';
+        if (mqttTopicEl) mqttTopicEl.value = '';
         if (payloadEl) payloadEl.value = '';
         if (payloadGroupEl) payloadGroupEl.style.display = 'none';
+        if (mqttTopicGroupEl) mqttTopicGroupEl.style.display = 'none';
         if (navGroupEl) navGroupEl.style.display = 'none';
         macrosUpdatePayloadCharCounter();
         macrosRenderIconSummary();
@@ -855,17 +871,47 @@ function macrosRenderEditorFields() {
 
     if (labelEl) labelEl.value = cfg.label || '';
     if (actionEl) actionEl.value = cfg.action || 'none';
-    if (payloadEl) payloadEl.value = cfg.payload || '';
 
     const action = (cfg.action || 'none');
+
+    if (mqttTopicEl) mqttTopicEl.value = cfg.mqtt_topic || '';
+    if (payloadEl) payloadEl.value = cfg.payload || '';
     const textEnabled = macrosActionUsesTextPayload(action);
     const navEnabled = macrosActionUsesScreenPayload(action);
+
+    // MQTT topic textbox: only show it for mqtt_send.
+    if (mqttTopicGroupEl) mqttTopicGroupEl.style.display = (action === 'mqtt_send') ? 'block' : 'none';
+    if (mqttTopicEl) {
+        mqttTopicEl.disabled = false;
+        if (action !== 'mqtt_send') mqttTopicEl.value = '';
+    }
 
     // Payload textarea: only show it for Send Keys.
     if (payloadGroupEl) payloadGroupEl.style.display = textEnabled ? 'block' : 'none';
     if (payloadEl) {
         payloadEl.disabled = false;
         if (!textEnabled) payloadEl.value = '';
+
+        if (action === 'send_keys') {
+            payloadEl.maxLength = MACROS_PAYLOAD_MAX;
+            payloadEl.placeholder = 'Example:\nSTRING Hello world\nENTER\n';
+            if (payloadLabelEl) payloadLabelEl.textContent = 'Send Keys (Script)';
+            if (payloadHelpEl) {
+                payloadHelpEl.innerHTML = `Used when Action is <strong>Send Keys (Script)</strong> (DuckyScript-like subset). <span style="margin-left: 8px;">Chars: <span id="macro_payload_chars">0</span>/${MACROS_PAYLOAD_MAX}</span>`;
+            }
+            if (duckyHelpBtn) duckyHelpBtn.style.display = 'inline';
+        } else if (action === 'mqtt_send') {
+            payloadEl.maxLength = MACROS_PAYLOAD_MAX;
+            payloadEl.placeholder = 'Payload (optional)\nExample:\n{"button":"mute"}\n';
+            if (payloadLabelEl) payloadLabelEl.textContent = 'MQTT payload';
+            if (payloadHelpEl) {
+                payloadHelpEl.innerHTML = `Optional payload text. <span style="margin-left: 8px;">Chars: <span id="macro_payload_chars">0</span>/${MACROS_PAYLOAD_MAX}</span>`;
+            }
+            if (duckyHelpBtn) duckyHelpBtn.style.display = 'none';
+        } else {
+            // Other payload actions handled elsewhere.
+            if (duckyHelpBtn) duckyHelpBtn.style.display = 'none';
+        }
     }
 
     // Screen dropdown: only show it for Go to Screen.
@@ -1085,12 +1131,30 @@ function macrosBindEditorEvents() {
             if (!cfg) return;
             cfg.action = actionEl.value || 'none';
 
+            if (cfg.action === 'mqtt_send') {
+                cfg.mqtt_topic = '';
+                cfg.payload = '';
+            }
+
             // Keep stored data tidy.
             if (!macrosActionSupportsPayload(cfg.action)) cfg.payload = '';
+            if (cfg.action !== 'mqtt_send') cfg.mqtt_topic = '';
             if (cfg.action === 'none') macrosClearIcon(cfg);
 
             macrosSetDirty(true);
             macrosRenderAll();
+        });
+    }
+
+    const mqttTopicEl = document.getElementById('macro_mqtt_topic');
+    if (mqttTopicEl) {
+        mqttTopicEl.addEventListener('input', () => {
+            const cfg = macrosGetSelectedButton();
+            if (!cfg) return;
+            cfg.mqtt_topic = macrosClampString(mqttTopicEl.value, MACROS_MQTT_TOPIC_MAX);
+            if (mqttTopicEl.value !== cfg.mqtt_topic) mqttTopicEl.value = cfg.mqtt_topic;
+            macrosSetDirty(true);
+            macrosRenderButtonGrid();
         });
     }
 
@@ -1107,6 +1171,8 @@ function macrosBindEditorEvents() {
         payloadEl.addEventListener('input', () => {
             const cfg = macrosGetSelectedButton();
             if (!cfg) return;
+
+            const action = (cfg.action || 'none');
             cfg.payload = macrosClampString(payloadEl.value, MACROS_PAYLOAD_MAX);
             if (payloadEl.value !== cfg.payload) payloadEl.value = cfg.payload;
             macrosSetDirty(true);

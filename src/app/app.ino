@@ -228,6 +228,10 @@ void setup()
   char sanitized[CONFIG_DEVICE_NAME_MAX_LEN];
   config_manager_sanitize_device_name(device_config.device_name, sanitized, sizeof(sanitized));
   mqtt_manager.begin(&device_config, device_config.device_name, sanitized);
+
+  #if HAS_DISPLAY
+  display_manager_set_mqtt_manager(&mqtt_manager);
+  #endif
   #endif
 
   lastHeartbeat = millis();

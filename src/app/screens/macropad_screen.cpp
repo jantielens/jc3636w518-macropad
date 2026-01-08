@@ -10,6 +10,10 @@
 #include "../log_manager.h"
 #include "../config_manager.h"
 
+#if HAS_MQTT
+#include "../mqtt_manager.h"
+#endif
+
 #if HAS_DISPLAY
 #include "../png_assets.h"
 #endif
@@ -50,6 +54,7 @@ static const char* actionToShortLabel(MacroButtonAction a) {
         case MacroButtonAction::NavNextScreen: return "Next";
         case MacroButtonAction::NavToScreen: return "Go";
         case MacroButtonAction::GoBack: return "Back";
+        case MacroButtonAction::MqttSend: return "MQTT";
         default: return "—";
     }
 }
@@ -781,6 +786,35 @@ void MacroPadScreen::handleButtonClick(uint8_t b) {
 
         BleKeyboardManager* kb = getBleKeyboard();
         ducky_execute(btnCfg->payload, kb);
+        return;
+    }
+
+    if (btnCfg->action == MacroButtonAction::MqttSend) {
+        const char* topic = btnCfg->mqtt_topic;
+        const char* payload = btnCfg->payload;
+
+        if (!topic || topic[0] == '\0') {
+            displayMgr->showError("MQTT", "Missing topic");
+            return;
+        }
+
+        #if HAS_MQTT
+        MqttManager* mqtt = displayMgr->getMqttManager();
+        if (!mqtt) {
+            displayMgr->showError("MQTT", "MQTT manager not available");
+            return;
+        }
+
+        const bool ok = mqtt->publishImmediate(topic, payload ? payload : "", false);
+        if (!ok) {
+            Logger.logMessagef("Macro", "MQTT publish failed: topic=%s", topic);
+            displayMgr->showError("MQTT publish failed", topic);
+        }
+        #else
+        Logger.logMessagef("Macro", "MQTT not supported in this firmware: topic=%s", topic);
+        displayMgr->showError("MQTT", "Not supported in this firmware");
+        #endif
+
         return;
     }
 }

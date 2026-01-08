@@ -25,6 +25,7 @@
 // Note: macros are stored in NVS as a single blob; size changes invalidate stored config.
 #define MACROS_LABEL_MAX_LEN 16
 #define MACROS_PAYLOAD_MAX_LEN 256
+#define MACROS_MQTT_TOPIC_MAX_LEN 128
 #define MACROS_ICON_ID_MAX_LEN 32
 // UTF-8 bytes (not Unicode code points). Keep generous to support ZWJ emoji sequences.
 #define MACROS_ICON_DISPLAY_MAX_LEN 64
@@ -44,6 +45,7 @@ enum class MacroButtonAction : uint8_t {
     NavNextScreen = 3,
     NavToScreen = 4,
     GoBack = 5,
+    MqttSend = 6,
 };
 
 enum class MacroIconType : uint8_t {
@@ -67,8 +69,13 @@ struct MacroButtonConfig {
     // Generic action payload.
     // - SendKeys: DuckyScript-like payload
     // - NavToScreen: target screen id (e.g. "macro1", "info")
+    // - MqttSend: payload string (may be empty)
     // - Others: unused for now
     char payload[MACROS_PAYLOAD_MAX_LEN];
+
+    // Per-button MQTT topic (full topic, no auto-prefixing).
+    // Used only for MqttSend.
+    char mqtt_topic[MACROS_MQTT_TOPIC_MAX_LEN];
     MacroButtonIcon icon;
 
     // Optional per-button appearance overrides (0xRRGGBB or MACROS_COLOR_UNSET).

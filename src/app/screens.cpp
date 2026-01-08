@@ -16,6 +16,7 @@
 #include "screens/splash_screen.cpp"
 #include "screens/info_screen.cpp"
 #include "screens/test_screen.cpp"
+#include "screens/error_screen.cpp"
 
 // Macro pad screens (8 fixed screens)
 #include "screens/macropad_screen.cpp"

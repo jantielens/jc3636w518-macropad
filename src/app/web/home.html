@@ -82,12 +82,19 @@
                             <select id="macro_action" name="macro_action">
                                 <option value="none">No Action (button hidden)</option>
                                 <option value="send_keys">Send Keys (Script)</option>
+                                <option value="mqtt_send">Send MQTT Message</option>
                                 <option value="nav_prev">Previous Macro Page</option>
                                 <option value="nav_next">Next Macro Page</option>
                                 <option value="nav_to">Go to Screen</option>
                                 <option value="go_back">Back (Previous Screen)</option>
                             </select>
                             <small>Navigation wraps (Screen 1 ↔ Screen 8).</small>
+                        </div>
+
+                        <div class="form-group" id="macro_mqtt_topic_group" style="display:none;">
+                            <label for="macro_mqtt_topic">MQTT topic</label>
+                            <input type="text" id="macro_mqtt_topic" name="macro_mqtt_topic" maxlength="127" placeholder="e.g., homeassistant/trigger/macropad">
+                            <small>Full topic (no auto-prefix). Required for <strong>Send MQTT Message</strong>.</small>
                         </div>
 
                         <div class="form-group" id="macro_nav_to_group" style="display:none;">
@@ -98,12 +105,12 @@
 
                         <div class="form-group" id="macro_payload_group">
                             <div class="label-row">
-                                <label for="macro_payload">Send Keys (Script)</label>
+                                <label for="macro_payload" id="macro_payload_label">Action payload</label>
                                 <button type="button" class="link-button" id="ducky_help_open" aria-haspopup="dialog" aria-controls="ducky_help_overlay">Syntax help</button>
                             </div>
-                            <textarea id="macro_payload" name="macro_payload" rows="5" maxlength="255" placeholder="Example:&#10;STRING Hello world&#10;ENTER&#10;"></textarea>
+                            <textarea id="macro_payload" name="macro_payload" rows="5" maxlength="255" placeholder=""></textarea>
                             <small id="macro_payload_help">
-                                Used when Action is <strong>Send Keys (Script)</strong> (DuckyScript-like subset).
+                                Used by actions that need a payload.
                                 <span style="margin-left: 8px;">Chars: <span id="macro_payload_chars">0</span>/255</span>
                             </small>
                         </div>

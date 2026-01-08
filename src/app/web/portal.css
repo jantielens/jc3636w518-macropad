@@ -640,6 +640,7 @@ textarea {
 /* Macros editor: keep the Send Keys box compact by default */
 #macro_payload {
     min-height: 80px;
+    overflow: auto;
 }
 
 textarea::placeholder {

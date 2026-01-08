@@ -203,6 +203,7 @@ static const char* macro_action_to_string(MacroButtonAction a) {
         case MacroButtonAction::NavNextScreen: return "nav_next";
         case MacroButtonAction::NavToScreen: return "nav_to";
         case MacroButtonAction::GoBack: return "go_back";
+        case MacroButtonAction::MqttSend: return "mqtt_send";
         default: return "none";
     }
 }
@@ -234,6 +235,7 @@ static MacroButtonAction macro_action_from_string(const char* s) {
     if (strcasecmp(s, "nav_next") == 0) return MacroButtonAction::NavNextScreen;
     if (strcasecmp(s, "nav_to") == 0) return MacroButtonAction::NavToScreen;
     if (strcasecmp(s, "go_back") == 0) return MacroButtonAction::GoBack;
+    if (strcasecmp(s, "mqtt_send") == 0) return MacroButtonAction::MqttSend;
     return MacroButtonAction::None;
 }
 
@@ -258,7 +260,7 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
-    response->print("{\"success\":true,\"version\":8,\"buttons_per_screen\":");
+    response->print("{\"success\":true,\"version\":9,\"buttons_per_screen\":");
     response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
 
     // Global defaults (always present)
@@ -327,10 +329,11 @@ void handleGetMacros(AsyncWebServerRequest *request) {
             if (b > 0) response->print(",");
 
             // Use ArduinoJson to correctly escape strings, but keep the document tiny.
-            StaticJsonDocument<512> item;
+            StaticJsonDocument<768> item;
             item["label"] = btn->label;
             item["action"] = macro_action_to_string(btn->action);
             item["payload"] = btn->payload;
+            item["mqtt_topic"] = btn->mqtt_topic;
 
             JsonObject icon = item.createNestedObject("icon");
             icon["type"] = macro_icon_type_to_string(btn->icon.type);
@@ -678,6 +681,7 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             const char* label = bo["label"] | "";
             const char* action_s = bo["action"] | "none";
             const char* payload = bo["payload"] | "";
+            const char* mqtt_topic = bo["mqtt_topic"] | "";
 
             MacroIconType iconType = MacroIconType::None;
             const char* iconId = "";
@@ -692,6 +696,7 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             strlcpy(next->buttons[s][b].label, label, sizeof(next->buttons[s][b].label));
             next->buttons[s][b].action = macro_action_from_string(action_s);
             strlcpy(next->buttons[s][b].payload, payload, sizeof(next->buttons[s][b].payload));
+            strlcpy(next->buttons[s][b].mqtt_topic, mqtt_topic, sizeof(next->buttons[s][b].mqtt_topic));
 
             next->buttons[s][b].icon.type = iconType;
             strlcpy(next->buttons[s][b].icon.id, iconId, sizeof(next->buttons[s][b].icon.id));
@@ -705,13 +710,28 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             // Normalize: if action is none, clear payload/icon to keep state tidy.
             if (next->buttons[s][b].action == MacroButtonAction::None) {
                 next->buttons[s][b].payload[0] = '\0';
+                next->buttons[s][b].mqtt_topic[0] = '\0';
                 next->buttons[s][b].icon.type = MacroIconType::None;
                 next->buttons[s][b].icon.id[0] = '\0';
                 next->buttons[s][b].icon.display[0] = '\0';
             }
 
+            // Validate: mqtt_send requires a topic.
+            if (next->buttons[s][b].action == MacroButtonAction::MqttSend) {
+                if (!next->buttons[s][b].mqtt_topic[0]) {
+                    free(next);
+                    request->send(400, "application/json", "{\"success\":false,\"message\":\"mqtt_send requires mqtt_topic\"}");
+                    return;
+                }
+            }
+
+            // For non-MQTT actions, ignore stored mqtt_topic.
+            if (next->buttons[s][b].action != MacroButtonAction::MqttSend) {
+                next->buttons[s][b].mqtt_topic[0] = '\0';
+            }
+
             // For non-payload actions, ignore stored payload.
-            if (next->buttons[s][b].action != MacroButtonAction::SendKeys && next->buttons[s][b].action != MacroButtonAction::NavToScreen) {
+            if (next->buttons[s][b].action != MacroButtonAction::SendKeys && next->buttons[s][b].action != MacroButtonAction::NavToScreen && next->buttons[s][b].action != MacroButtonAction::MqttSend) {
                 next->buttons[s][b].payload[0] = '\0';
             }
         }
