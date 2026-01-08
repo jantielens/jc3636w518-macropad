@@ -16,6 +16,10 @@ const API_FIRMWARE_LATEST = '/api/firmware/latest';
 const API_FIRMWARE_UPDATE = '/api/firmware/update';
 const API_FIRMWARE_UPDATE_STATUS = '/api/firmware/update/status';
 const API_MACROS = '/api/macros';
+const API_ICONS = '/api/icons';
+const API_ICONS_INSTALLED = '/api/icons/installed';
+const API_ICON_INSTALL = '/api/icons/install';
+const API_ICONS_GC = '/api/icons/gc';
 
 let selectedFile = null;
 let portalMode = 'full'; // 'core' or 'full'
@@ -51,16 +55,378 @@ let macrosSelectorLayout = MACROS_SELECTOR_LAYOUT_DEFAULT;
 const MACROS_LABEL_MAX = 15;
 const MACROS_SCRIPT_MAX = 255;
 const MACROS_ICON_ID_MAX = 31;
+// UTF-8 bytes (not code points). Firmware uses 64 bytes including NUL.
+const MACROS_ICON_DISPLAY_MAX = 63;
 
 // Keep in sync with src/app/macro_templates.h (macro_templates::default_id()).
 const MACROS_DEFAULT_TEMPLATE_ID = 'round_ring_9';
 
-let macrosPayloadCache = null; // { screens: [ { buttons: [ {label, action, script, icon_id}, ... ] }, ... ] }
+// Default colors (RGB only: 0xRRGGBB). Must match firmware defaults.
+const MACROS_DEFAULT_COLORS = {
+    screen_bg: 0x000000,
+    button_bg: 0x1E1E1E,
+    icon_color: 0xFFFFFF,
+    label_color: 0xFFFFFF,
+};
+
+let macrosPayloadCache = null; // { defaults:{...}, screens: [ { template, screen_bg?, buttons:[{label, action, script, icon:{type,id,display}, button_bg?, icon_color?, label_color?}, ...] }, ... ] }
 let macrosTemplatesCache = []; // [{id,name,selector_layout}, ...]
 let macrosSelectedScreen = 0; // 0-based
 let macrosSelectedButton = 0; // 0-based
 let macrosDirty = false;
 let macrosLoading = false;
+
+function macrosClampRgb24(value) {
+    const v = (typeof value === 'number' && isFinite(value)) ? value : 0;
+    return (v >>> 0) & 0x00FFFFFF;
+}
+
+function macrosColorToHex(value) {
+    const v = macrosClampRgb24(value);
+    return '#' + v.toString(16).padStart(6, '0');
+}
+
+function macrosHexToColor(hex) {
+    const s = (hex || '').toString().trim();
+    const m = /^#?([0-9a-fA-F]{6})$/.exec(s);
+    if (!m) return null;
+    return parseInt(m[1], 16) & 0x00FFFFFF;
+}
+
+function initDuckyHelpDialog() {
+    const openBtn = document.getElementById('ducky_help_open');
+    const overlay = document.getElementById('ducky_help_overlay');
+    if (!openBtn || !overlay) return; // Not on Home page
+
+    const closeBtn = document.getElementById('ducky_help_close');
+
+    const open = () => {
+        overlay.style.display = 'flex';
+    };
+
+    const close = () => {
+        overlay.style.display = 'none';
+    };
+
+    openBtn.addEventListener('click', open);
+    if (closeBtn) closeBtn.addEventListener('click', close);
+
+    // Click outside to close
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+    });
+
+    // Escape to close
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && overlay.style.display !== 'none') close();
+    });
+}
+
+function macrosGetSelectedScreenObj() {
+    if (!macrosPayloadCache) return null;
+    return macrosPayloadCache.screens[macrosSelectedScreen] || null;
+}
+
+// ===== ICONS (Home) =====
+let iconListCache = null; // [{id, kind}, ...]
+let macrosBuiltinIconIdsCache = []; // sorted list of builtin mask icon ids
+
+function getBuiltinMaskIcons() {
+    const icons = Array.isArray(iconListCache) ? iconListCache : [];
+    return icons
+        .filter(it => it && it.id && (it.kind === 'mask' || it.kind === 'mono' || it.kind === 'Mask'))
+        .map(it => String(it.id));
+}
+
+function refreshBuiltinMaskIconCache() {
+    macrosBuiltinIconIdsCache = getBuiltinMaskIcons().sort();
+}
+
+function macrosRenderBuiltinIconOptions({ filterText = '', preserveId = '' } = {}) {
+    const select = document.getElementById('macro_icon_builtin_select');
+    const countEl = document.getElementById('macro_icon_builtin_count');
+    if (!select) return;
+
+    const all = Array.isArray(macrosBuiltinIconIdsCache) ? macrosBuiltinIconIdsCache : [];
+    const filter = (filterText || '').toString().trim().toLowerCase();
+    const filtered = filter ? all.filter(id => id.toLowerCase().includes(filter)) : all;
+
+    select.innerHTML = '';
+    for (const id of filtered) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = id;
+        select.appendChild(opt);
+    }
+
+    if (countEl) {
+        countEl.textContent = `${filtered.length}/${all.length}`;
+    }
+
+    // Preserve selection when possible; otherwise select first option.
+    if (preserveId && filtered.includes(preserveId)) {
+        select.value = preserveId;
+    } else if (select.options.length > 0) {
+        select.selectedIndex = 0;
+    }
+}
+
+async function loadIcons() {
+    // Home page only.
+    const overlay = document.getElementById('macro_icon_overlay');
+    if (!overlay) return;
+
+    try {
+        const compiledRes = await fetch(API_ICONS);
+        if (!compiledRes.ok) throw new Error(`HTTP ${compiledRes.status}`);
+
+        const compiled = await compiledRes.json().catch(() => ({}));
+
+        const merged = [];
+        for (const it of (Array.isArray(compiled.icons) ? compiled.icons : [])) {
+            if (!it || !it.id) continue;
+            merged.push({ id: String(it.id), kind: it.kind || 'mask' });
+        }
+        iconListCache = merged;
+        refreshBuiltinMaskIconCache();
+    } catch (error) {
+        console.warn('Failed to load icons list:', error);
+        iconListCache = [];
+        refreshBuiltinMaskIconCache();
+    }
+}
+
+// ===== TWEMOJI LAZY-INSTALL (Home) =====
+
+function isLikelyEmojiLiteral(input) {
+    const s = (input || '').toString().trim();
+    if (!s) return false;
+
+    // If it already looks like a normal icon id (e.g. "ic_home", "emoji_u1f525"),
+    // don't treat it as a literal emoji.
+    if (/^[a-zA-Z0-9_]+$/.test(s)) return false;
+
+    // Heuristic: anything with non-ASCII, variation selectors, or ZWJ sequences.
+    for (const ch of s) {
+        const cp = ch.codePointAt(0);
+        if (cp > 0x7f) return true;
+    }
+    return false;
+}
+
+function fnv1a32(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = (h * 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+}
+
+function emojiToCodepoints(emojiStr, { includeVS16 = true } = {}) {
+    const cps = [];
+    for (const ch of (emojiStr || '')) {
+        const cp = ch.codePointAt(0);
+        if (!includeVS16 && cp === 0xfe0f) continue;
+        cps.push(cp.toString(16));
+    }
+    return cps;
+}
+
+function suggestIconIdForEmoji(emojiStr) {
+    const cps = emojiToCodepoints(emojiStr, { includeVS16: false });
+    if (cps.length === 1) return `emoji_u${cps[0]}`;
+    const h = fnv1a32(emojiStr).toString(16).padStart(8, '0');
+    return `emoji_${h}`;
+}
+
+async function fetchTwemojiPng(emojiStr) {
+    const cps1 = emojiToCodepoints(emojiStr, { includeVS16: true }).join('-');
+    const cps2 = emojiToCodepoints(emojiStr, { includeVS16: false }).join('-');
+
+    const base = 'https://cdnjs.cloudflare.com/ajax/libs/twemoji/14.0.2/72x72/';
+    const tryUrls = [];
+    if (cps1) tryUrls.push(base + cps1 + '.png');
+    if (cps2 && cps2 !== cps1) tryUrls.push(base + cps2 + '.png');
+
+    let lastErr = null;
+    for (const url of tryUrls) {
+        try {
+            const res = await fetch(url, { cache: 'force-cache' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const blob = await res.blob();
+            return { blob, url };
+        } catch (e) {
+            lastErr = e;
+        }
+    }
+    throw (lastErr || new Error('Failed to fetch Twemoji'));
+}
+
+async function convertPngBlobToLvgl565aBlob(pngBlob, { width = 64, height = 64 } = {}) {
+    const bitmap = await createImageBitmap(pngBlob);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.clearRect(0, 0, width, height);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(bitmap, 0, 0, width, height);
+
+    const img = ctx.getImageData(0, 0, width, height);
+    const rgba = img.data;
+
+    const headerSize = 16;
+    const payloadSize = width * height * 3; // RGB565 (2) + A (1)
+    const buf = new ArrayBuffer(headerSize + payloadSize);
+    const dv = new DataView(buf);
+    const out = new Uint8Array(buf);
+
+    // Magic "ICN1"
+    out[0] = 0x49; out[1] = 0x43; out[2] = 0x4e; out[3] = 0x31;
+    dv.setUint16(4, width, true);
+    dv.setUint16(6, height, true);
+    dv.setUint8(8, 1); // format 1 = RGB565+Alpha
+    dv.setUint8(9, 0);
+    dv.setUint8(10, 0);
+    dv.setUint8(11, 0);
+    dv.setUint32(12, payloadSize, true);
+
+    let o = headerSize;
+    for (let i = 0; i < rgba.length; i += 4) {
+        const r = rgba[i + 0];
+        const g = rgba[i + 1];
+        const b = rgba[i + 2];
+        const a = rgba[i + 3];
+
+        const rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+        out[o + 0] = rgb565 & 0xff;        // little-endian
+        out[o + 1] = (rgb565 >> 8) & 0xff;
+        out[o + 2] = a;
+        o += 3;
+    }
+
+    return buf;
+}
+
+async function installTwemojiToDevice(emojiStr, { onProgress } = {}) {
+    const iconId = suggestIconIdForEmoji(emojiStr);
+
+    if (typeof onProgress === 'function') onProgress(`Downloading ${emojiStr}…`);
+    const { blob: pngBlob, url } = await fetchTwemojiPng(emojiStr);
+
+    if (typeof onProgress === 'function') onProgress(`Preparing ${emojiStr}…`);
+    const lvglBlob = await convertPngBlobToLvgl565aBlob(pngBlob, { width: 64, height: 64 });
+
+    if (typeof onProgress === 'function') onProgress(`Uploading ${emojiStr}…`);
+    const res = await fetch(`${API_ICON_INSTALL}?id=${encodeURIComponent(iconId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: lvglBlob,
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.success === false) {
+        throw new Error(data.message || `Install failed (${res.status})`);
+    }
+
+    return { iconId, sourceUrl: url };
+}
+
+async function macrosAutoInstallEmojiIcons(payload, { silent = false, onProgress } = {}) {
+    if (!payload || !Array.isArray(payload.screens)) return { ok: true, installed: 0 };
+
+    // Fetch installed icon IDs once (so we don't re-download/upload on every save).
+    const installedIds = new Set();
+    try {
+        if (typeof onProgress === 'function') onProgress('Checking installed emoji icons…');
+        const res = await fetch(API_ICONS_INSTALLED);
+        if (res.ok) {
+            const data = await res.json().catch(() => ({}));
+            for (const it of (Array.isArray(data.icons) ? data.icons : [])) {
+                if (it && it.id) installedIds.add(String(it.id));
+            }
+        }
+    } catch (_) {
+        // Best-effort; fall back to always attempting installs.
+    }
+
+    const emojiSet = new Set();
+    for (const screen of payload.screens) {
+        if (!screen || !Array.isArray(screen.buttons)) continue;
+        for (const btn of screen.buttons) {
+            if (!btn) continue;
+            const icon = btn.icon;
+            if (!icon || icon.type !== 'emoji') continue;
+
+            const display = (icon.display || '').toString().trim();
+            if (!display) continue;
+            // Only install if it looks like a literal emoji.
+            if (!isLikelyEmojiLiteral(display)) continue;
+
+            emojiSet.add(display);
+        }
+    }
+
+    const emojiList = Array.from(emojiSet);
+    if (emojiList.length === 0) return { ok: true, installed: 0 };
+
+    const toInstall = emojiList.filter(e => !installedIds.has(suggestIconIdForEmoji(e)));
+
+    if (toInstall.length > 0) {
+        if (!silent) showMessage(`Installing ${toInstall.length} emoji icon(s)…`, 'info');
+        if (typeof onProgress === 'function') onProgress(`Installing ${toInstall.length} emoji icon(s)…`);
+    }
+
+    const mapping = new Map(); // emojiStr -> iconId
+    let installIndex = 0;
+    for (const emojiStr of emojiList) {
+        const expectedId = suggestIconIdForEmoji(emojiStr);
+        if (installedIds.has(expectedId)) {
+            mapping.set(emojiStr, expectedId);
+            continue;
+        }
+
+        installIndex += 1;
+        const idx = installIndex;
+        const total = toInstall.length;
+        try {
+            if (typeof onProgress === 'function' && total > 0) onProgress(`(${idx}/${total}) ${emojiStr}`);
+            const { iconId } = await installTwemojiToDevice(emojiStr, { onProgress });
+            mapping.set(emojiStr, iconId);
+            installedIds.add(iconId);
+        } catch (e) {
+            const msg = (e && e.message) ? e.message : 'Install failed';
+            return { ok: false, message: `Failed to install ${emojiStr}: ${msg}` };
+        }
+    }
+
+    // Replace literals in the payload with stable icon IDs.
+    for (const screen of payload.screens) {
+        if (!screen || !Array.isArray(screen.buttons)) continue;
+        for (const btn of screen.buttons) {
+            if (!btn) continue;
+            const icon = btn.icon;
+            if (!icon || icon.type !== 'emoji') continue;
+
+            const display = (icon.display || '').toString().trim();
+            if (!display) continue;
+            if (!isLikelyEmojiLiteral(display)) continue;
+
+            const iconId = mapping.get(display);
+            if (iconId) icon.id = iconId;
+        }
+    }
+
+    // Refresh icon list so autocomplete includes newly installed icons.
+    if (toInstall.length > 0) {
+        await loadIcons();
+    }
+
+    return { ok: true, installed: toInstall.length };
+}
 
 function macrosGetSelectedTemplateId() {
     if (!macrosPayloadCache) return '';
@@ -89,11 +455,11 @@ function macrosSetDirty(dirty) {
 }
 
 function macrosCreateEmptyButton() {
-    return { label: '', action: 'none', script: '', icon_id: '' };
+    return { label: '', action: 'none', script: '', icon: { type: 'none', id: '', display: '' } };
 }
 
 function macrosCreateEmptyPayload() {
-    const payload = { screens: [] };
+    const payload = { defaults: { ...MACROS_DEFAULT_COLORS }, screens: [] };
     for (let s = 0; s < macrosScreenCount; s++) {
         const buttons = [];
         for (let b = 0; b < macrosButtonsPerScreen; b++) {
@@ -108,6 +474,35 @@ function macrosNormalizePayload(payload) {
     const out = macrosCreateEmptyPayload();
     if (!payload || !Array.isArray(payload.screens)) return out;
 
+    function normalizeIcon(input) {
+        // New schema: {type,id,display}
+        if (input && typeof input === 'object') {
+            const t = (input.type || 'none').toString();
+            const type = (t === 'builtin' || t === 'emoji' || t === 'asset') ? t : 'none';
+            return {
+                type,
+                id: (input.id || '').toString(),
+                display: (input.display || '').toString(),
+            };
+        }
+
+        // Legacy fallback (should not happen anymore, but keeps UI resilient).
+        const legacy = (input || '').toString();
+        if (!legacy) return { type: 'none', id: '', display: '' };
+        return { type: 'builtin', id: legacy, display: '' };
+    }
+
+    // Defaults
+    if (payload.defaults && typeof payload.defaults === 'object') {
+        const d = payload.defaults;
+        out.defaults = {
+            screen_bg: macrosClampRgb24(typeof d.screen_bg === 'number' ? d.screen_bg : MACROS_DEFAULT_COLORS.screen_bg),
+            button_bg: macrosClampRgb24(typeof d.button_bg === 'number' ? d.button_bg : MACROS_DEFAULT_COLORS.button_bg),
+            icon_color: macrosClampRgb24(typeof d.icon_color === 'number' ? d.icon_color : MACROS_DEFAULT_COLORS.icon_color),
+            label_color: macrosClampRgb24(typeof d.label_color === 'number' ? d.label_color : MACROS_DEFAULT_COLORS.label_color),
+        };
+    }
+
     if (Array.isArray(payload.templates)) {
         macrosTemplatesCache = payload.templates;
     }
@@ -120,14 +515,26 @@ function macrosNormalizePayload(payload) {
             out.screens[s].template = String(screen.template);
         }
 
+        // Optional per-screen override
+        if (typeof screen.screen_bg === 'number' && isFinite(screen.screen_bg)) {
+            out.screens[s].screen_bg = macrosClampRgb24(screen.screen_bg);
+        }
+
         for (let b = 0; b < Math.min(macrosButtonsPerScreen, screen.buttons.length); b++) {
             const btn = screen.buttons[b] || {};
-            out.screens[s].buttons[b] = {
+            const next = {
                 label: (btn.label || ''),
                 action: (btn.action || 'none'),
                 script: (btn.script || ''),
-                icon_id: (btn.icon_id || ''),
+                icon: normalizeIcon(btn.icon || btn.icon_id),
             };
+
+            // Optional per-button appearance overrides
+            if (typeof btn.button_bg === 'number' && isFinite(btn.button_bg)) next.button_bg = macrosClampRgb24(btn.button_bg);
+            if (typeof btn.icon_color === 'number' && isFinite(btn.icon_color)) next.icon_color = macrosClampRgb24(btn.icon_color);
+            if (typeof btn.label_color === 'number' && isFinite(btn.label_color)) next.label_color = macrosClampRgb24(btn.label_color);
+
+            out.screens[s].buttons[b] = next;
         }
     }
 
@@ -162,6 +569,92 @@ function macrosRenderTemplateSelect() {
 function macrosClampString(value, maxLen) {
     const s = (value || '').toString();
     return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
+function macrosClampUtf8Bytes(value, maxBytes) {
+    const s = (value || '').toString();
+    const enc = new TextEncoder();
+    if (enc.encode(s).length <= maxBytes) return s;
+
+    const cps = Array.from(s);
+    while (cps.length > 0) {
+        cps.pop();
+        const t = cps.join('');
+        if (enc.encode(t).length <= maxBytes) return t;
+    }
+    return '';
+}
+
+function macrosFirstGrapheme(input) {
+    const s = (input || '').toString().trim();
+    if (!s) return '';
+    try {
+        if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+            const seg = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+            for (const part of seg.segment(s)) {
+                return part.segment;
+            }
+        }
+    } catch (_) {
+        // Ignore and fall back.
+    }
+    const cps = Array.from(s);
+    return cps.length ? cps[0] : '';
+}
+
+function macrosEnsureIconObject(btn) {
+    if (!btn) return null;
+    if (!btn.icon || typeof btn.icon !== 'object') {
+        btn.icon = { type: 'none', id: '', display: '' };
+    }
+    if (!btn.icon.type) btn.icon.type = 'none';
+    if (btn.icon.id === undefined) btn.icon.id = '';
+    if (btn.icon.display === undefined) btn.icon.display = '';
+    return btn.icon;
+}
+
+function macrosClearIcon(btn) {
+    const icon = macrosEnsureIconObject(btn);
+    if (!icon) return;
+    icon.type = 'none';
+    icon.id = '';
+    icon.display = '';
+}
+
+function macrosIconSummaryText(icon) {
+    if (!icon || icon.type === 'none') return '—';
+    if (icon.type === 'emoji') {
+        const d = (icon.display || '').toString().trim();
+        return d || '—';
+    }
+
+    // For builtin/asset: show id (stable lookup key).
+    const id = (icon.id || '').toString().trim();
+    if (!id) return '—';
+    return id;
+}
+
+function macrosRenderIconSummary() {
+    const cfg = macrosGetSelectedButton();
+    const summaryEl = document.getElementById('macro_icon_summary');
+    const editBtn = document.getElementById('macro_icon_edit_btn');
+    const clearBtn = document.getElementById('macro_icon_clear_btn');
+    if (!summaryEl || !editBtn || !clearBtn) return;
+
+    if (!cfg) {
+        summaryEl.textContent = '—';
+        editBtn.disabled = true;
+        clearBtn.disabled = true;
+        return;
+    }
+
+    const icon = macrosEnsureIconObject(cfg);
+    summaryEl.textContent = macrosIconSummaryText(icon);
+
+    const action = (cfg.action || 'none');
+    const enabled = action !== 'none';
+    editBtn.disabled = !enabled;
+    clearBtn.disabled = !enabled || (icon && icon.type === 'none');
 }
 
 function macrosActionSupportsScript(action) {
@@ -310,22 +803,20 @@ function macrosRenderEditorFields() {
     const actionEl = document.getElementById('macro_action');
     const scriptEl = document.getElementById('macro_script');
     const scriptGroupEl = document.getElementById('macro_script_group');
-    const iconEl = document.getElementById('macro_icon_id');
 
     if (!cfg) {
         if (labelEl) labelEl.value = '';
         if (actionEl) actionEl.value = 'none';
         if (scriptEl) scriptEl.value = '';
-        if (iconEl) iconEl.value = '';
         if (scriptGroupEl) scriptGroupEl.style.display = 'none';
         macrosUpdateScriptCharCounter();
+        macrosRenderIconSummary();
         return;
     }
 
     if (labelEl) labelEl.value = cfg.label || '';
     if (actionEl) actionEl.value = cfg.action || 'none';
     if (scriptEl) scriptEl.value = cfg.script || '';
-    if (iconEl) iconEl.value = cfg.icon_id || '';
 
     const action = (cfg.action || 'none');
     const scriptEnabled = macrosActionSupportsScript(action);
@@ -339,10 +830,67 @@ function macrosRenderEditorFields() {
 
     macrosUpdateScriptCharCounter();
 
+    if (action === 'none') {
+        macrosClearIcon(cfg);
+    }
+    macrosRenderIconSummary();
+}
+
+function macrosRenderColorFields() {
+    const payload = macrosPayloadCache;
+    if (!payload) return;
+
+    // Defaults
+    const d = payload.defaults || MACROS_DEFAULT_COLORS;
+    const defScreenEl = document.getElementById('macro_default_screen_bg');
+    const defBtnEl = document.getElementById('macro_default_button_bg');
+    const defIconEl = document.getElementById('macro_default_icon_color');
+    const defLabelEl = document.getElementById('macro_default_label_color');
+    if (defScreenEl) defScreenEl.value = macrosColorToHex(d.screen_bg);
+    if (defBtnEl) defBtnEl.value = macrosColorToHex(d.button_bg);
+    if (defIconEl) defIconEl.value = macrosColorToHex(d.icon_color);
+    if (defLabelEl) defLabelEl.value = macrosColorToHex(d.label_color);
+
+    // Per-screen override
+    const screen = macrosGetSelectedScreenObj();
+    const screenEnabledEl = document.getElementById('macro_screen_bg_enabled');
+    const screenColorEl = document.getElementById('macro_screen_bg');
+    const screenHasOverride = !!(screen && typeof screen.screen_bg === 'number');
+    if (screenEnabledEl) screenEnabledEl.checked = screenHasOverride;
+    if (screenColorEl) {
+        screenColorEl.disabled = !screenHasOverride;
+        screenColorEl.value = macrosColorToHex(screenHasOverride ? screen.screen_bg : d.screen_bg);
+    }
+
+    // Per-button overrides
+    const btn = macrosGetSelectedButton();
+    const btnBgEnabledEl = document.getElementById('macro_button_bg_enabled');
+    const btnBgEl = document.getElementById('macro_button_bg');
+    const iconEnabledEl = document.getElementById('macro_icon_color_enabled');
+    const iconEl = document.getElementById('macro_icon_color');
+    const labelEnabledEl = document.getElementById('macro_label_color_enabled');
+    const labelEl = document.getElementById('macro_label_color');
+
+    const hasBtnBg = !!(btn && typeof btn.button_bg === 'number');
+    const hasIconColor = !!(btn && typeof btn.icon_color === 'number');
+    const hasLabelColor = !!(btn && typeof btn.label_color === 'number');
+
+    if (btnBgEnabledEl) btnBgEnabledEl.checked = hasBtnBg;
+    if (btnBgEl) {
+        btnBgEl.disabled = !hasBtnBg;
+        btnBgEl.value = macrosColorToHex(hasBtnBg ? btn.button_bg : d.button_bg);
+    }
+
+    if (iconEnabledEl) iconEnabledEl.checked = hasIconColor;
     if (iconEl) {
-        // Keep editable so users can pre-assign stable IDs, but grey it out for None.
-        iconEl.disabled = (action === 'none');
-        if (action === 'none') iconEl.value = '';
+        iconEl.disabled = !hasIconColor;
+        iconEl.value = macrosColorToHex(hasIconColor ? btn.icon_color : d.icon_color);
+    }
+
+    if (labelEnabledEl) labelEnabledEl.checked = hasLabelColor;
+    if (labelEl) {
+        labelEl.disabled = !hasLabelColor;
+        labelEl.value = macrosColorToHex(hasLabelColor ? btn.label_color : d.label_color);
     }
 }
 
@@ -352,6 +900,68 @@ function macrosRenderAll() {
     macrosRenderTemplateSelect();
     macrosRenderButtonGrid();
     macrosRenderEditorFields();
+    macrosRenderColorFields();
+}
+
+function macrosOpenIconDialog() {
+    const overlay = document.getElementById('macro_icon_overlay');
+    if (!overlay) return;
+
+    const cfg = macrosGetSelectedButton();
+    if (!cfg) return;
+    const action = (cfg.action || 'none');
+    if (action === 'none') return;
+
+    const icon = macrosEnsureIconObject(cfg);
+    const tabBuiltin = document.getElementById('macro_icon_tab_builtin');
+    const tabEmoji = document.getElementById('macro_icon_tab_emoji');
+    const panelBuiltin = document.getElementById('macro_icon_panel_builtin');
+    const panelEmoji = document.getElementById('macro_icon_panel_emoji');
+    const select = document.getElementById('macro_icon_builtin_select');
+    const searchEl = document.getElementById('macro_icon_builtin_search');
+    const emojiInput = document.getElementById('macro_icon_emoji_input');
+
+    refreshBuiltinMaskIconCache();
+    if (searchEl) searchEl.value = '';
+
+    function setTab(which) {
+        const isBuiltin = which === 'builtin';
+        if (panelBuiltin) panelBuiltin.style.display = isBuiltin ? 'block' : 'none';
+        if (panelEmoji) panelEmoji.style.display = isBuiltin ? 'none' : 'block';
+        if (tabBuiltin) tabBuiltin.setAttribute('aria-selected', isBuiltin ? 'true' : 'false');
+        if (tabEmoji) tabEmoji.setAttribute('aria-selected', !isBuiltin ? 'true' : 'false');
+    }
+
+    if (icon && icon.type === 'emoji') {
+        setTab('emoji');
+    } else {
+        setTab('builtin');
+    }
+
+    if (select) {
+        const preserveId = (icon && icon.type === 'builtin' && icon.id) ? String(icon.id) : '';
+        macrosRenderBuiltinIconOptions({ filterText: searchEl ? searchEl.value : '', preserveId });
+    }
+
+    if (emojiInput) {
+        const v = (icon && icon.type === 'emoji' && icon.display) ? String(icon.display) : '';
+        emojiInput.value = macrosFirstGrapheme(v);
+    }
+
+    // Focus the most relevant control.
+    if (icon && icon.type === 'emoji') {
+        if (emojiInput) emojiInput.focus();
+    } else {
+        if (searchEl) searchEl.focus();
+        else if (select) select.focus();
+    }
+
+    overlay.style.display = 'flex';
+}
+
+function macrosCloseIconDialog() {
+    const overlay = document.getElementById('macro_icon_overlay');
+    if (overlay) overlay.style.display = 'none';
 }
 
 function macrosBindEditorEvents() {
@@ -398,7 +1008,7 @@ function macrosBindEditorEvents() {
 
             // Keep stored data tidy.
             if (!macrosActionSupportsScript(cfg.action)) cfg.script = '';
-            if (cfg.action === 'none') cfg.icon_id = '';
+            if (cfg.action === 'none') macrosClearIcon(cfg);
 
             macrosSetDirty(true);
             macrosRenderAll();
@@ -425,16 +1035,269 @@ function macrosBindEditorEvents() {
         });
     }
 
-    const iconEl = document.getElementById('macro_icon_id');
-    if (iconEl) {
-        iconEl.addEventListener('input', () => {
+    // ===== Icon dialog (Mono / Emoji) =====
+    const iconEditBtn = document.getElementById('macro_icon_edit_btn');
+    const iconClearBtn = document.getElementById('macro_icon_clear_btn');
+    const iconCancelBtn = document.getElementById('macro_icon_cancel_btn');
+    const iconApplyBtn = document.getElementById('macro_icon_apply_btn');
+    const iconDialogClearBtn = document.getElementById('macro_icon_dialog_clear_btn');
+    const tabBuiltin = document.getElementById('macro_icon_tab_builtin');
+    const tabEmoji = document.getElementById('macro_icon_tab_emoji');
+    const panelBuiltin = document.getElementById('macro_icon_panel_builtin');
+    const panelEmoji = document.getElementById('macro_icon_panel_emoji');
+    const builtinSelect = document.getElementById('macro_icon_builtin_select');
+    const builtinSearch = document.getElementById('macro_icon_builtin_search');
+    const emojiInput = document.getElementById('macro_icon_emoji_input');
+    const overlay = document.getElementById('macro_icon_overlay');
+
+    function setTab(which) {
+        const isBuiltin = which === 'builtin';
+        if (panelBuiltin) panelBuiltin.style.display = isBuiltin ? 'block' : 'none';
+        if (panelEmoji) panelEmoji.style.display = isBuiltin ? 'none' : 'block';
+        if (tabBuiltin) tabBuiltin.setAttribute('aria-selected', isBuiltin ? 'true' : 'false');
+        if (tabEmoji) tabEmoji.setAttribute('aria-selected', !isBuiltin ? 'true' : 'false');
+    }
+
+    if (tabBuiltin) tabBuiltin.addEventListener('click', () => setTab('builtin'));
+    if (tabEmoji) tabEmoji.addEventListener('click', () => setTab('emoji'));
+
+    function applyBuiltinFilter({ preserveId = '' } = {}) {
+        refreshBuiltinMaskIconCache();
+        macrosRenderBuiltinIconOptions({
+            filterText: builtinSearch ? builtinSearch.value : '',
+            preserveId: preserveId || (builtinSelect ? builtinSelect.value : ''),
+        });
+    }
+
+    if (builtinSearch) {
+        builtinSearch.addEventListener('input', () => {
+            applyBuiltinFilter({ preserveId: '' });
+        });
+
+        builtinSearch.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (builtinSelect) {
+                    builtinSelect.focus();
+                    if (builtinSelect.options.length > 0 && builtinSelect.selectedIndex < 0) builtinSelect.selectedIndex = 0;
+                }
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                macrosCloseIconDialog();
+            }
+        });
+    }
+
+    if (builtinSelect) {
+        builtinSelect.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (iconApplyBtn) iconApplyBtn.click();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                macrosCloseIconDialog();
+            }
+        });
+        builtinSelect.addEventListener('dblclick', () => {
+            if (iconApplyBtn) iconApplyBtn.click();
+        });
+    }
+
+    if (overlay) {
+        overlay.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                macrosCloseIconDialog();
+            }
+        });
+    }
+
+    // Emoji input: force single emoji/grapheme.
+    if (emojiInput) {
+        const normalize = () => {
+            const one = macrosFirstGrapheme(emojiInput.value);
+            if (emojiInput.value !== one) emojiInput.value = one;
+        };
+        emojiInput.addEventListener('input', normalize);
+        emojiInput.addEventListener('change', normalize);
+    }
+
+    if (iconEditBtn) {
+        iconEditBtn.addEventListener('click', () => {
+            macrosOpenIconDialog();
+        });
+    }
+
+    if (iconClearBtn) {
+        iconClearBtn.addEventListener('click', () => {
             const cfg = macrosGetSelectedButton();
             if (!cfg) return;
-            cfg.icon_id = macrosClampString(iconEl.value, MACROS_ICON_ID_MAX);
-            if (iconEl.value !== cfg.icon_id) iconEl.value = cfg.icon_id;
+            macrosClearIcon(cfg);
+            macrosSetDirty(true);
+            macrosRenderIconSummary();
+            macrosRenderButtonGrid();
+        });
+    }
+
+    const closeDialog = () => macrosCloseIconDialog();
+    if (iconCancelBtn) iconCancelBtn.addEventListener('click', closeDialog);
+
+    if (iconDialogClearBtn) {
+        iconDialogClearBtn.addEventListener('click', () => {
+            if (builtinSelect) builtinSelect.value = '';
+            if (builtinSearch) {
+                builtinSearch.value = '';
+                applyBuiltinFilter({ preserveId: '' });
+            }
+            if (emojiInput) emojiInput.value = '';
+        });
+    }
+
+    if (iconApplyBtn) {
+        iconApplyBtn.addEventListener('click', () => {
+            const cfg = macrosGetSelectedButton();
+            if (!cfg) return;
+            const action = (cfg.action || 'none');
+            if (action === 'none') return;
+
+            const icon = macrosEnsureIconObject(cfg);
+
+            const builtinVisible = panelBuiltin && panelBuiltin.style.display !== 'none';
+            if (builtinVisible) {
+                const id = builtinSelect ? (builtinSelect.value || '').toString().trim() : '';
+                if (!id) {
+                    macrosClearIcon(cfg);
+                } else {
+                    icon.type = 'builtin';
+                    icon.id = macrosClampString(id, MACROS_ICON_ID_MAX);
+                    icon.display = '';
+                }
+            } else {
+                const raw = emojiInput ? macrosFirstGrapheme(emojiInput.value) : '';
+                if (!raw) {
+                    macrosClearIcon(cfg);
+                } else {
+                    icon.type = 'emoji';
+                    icon.display = macrosClampUtf8Bytes(raw, MACROS_ICON_DISPLAY_MAX);
+                    // Always overwrite any previous builtin id; use stable emoji id.
+                    if (isLikelyEmojiLiteral(icon.display)) {
+                        icon.id = suggestIconIdForEmoji(icon.display);
+                    } else {
+                        icon.id = '';
+                    }
+                }
+            }
+
+            macrosSetDirty(true);
+            macrosRenderIconSummary();
+            macrosRenderButtonGrid();
+            macrosCloseIconDialog();
+        });
+    }
+
+    // ===== Color defaults (global) =====
+    const defScreenEl = document.getElementById('macro_default_screen_bg');
+    const defBtnEl = document.getElementById('macro_default_button_bg');
+    const defIconEl = document.getElementById('macro_default_icon_color');
+    const defLabelEl = document.getElementById('macro_default_label_color');
+
+    function ensureDefaults() {
+        if (!macrosPayloadCache) return null;
+        if (!macrosPayloadCache.defaults) macrosPayloadCache.defaults = { ...MACROS_DEFAULT_COLORS };
+        return macrosPayloadCache.defaults;
+    }
+
+    function bindDefaultColor(inputEl, key) {
+        if (!inputEl) return;
+        inputEl.addEventListener('input', () => {
+            const d = ensureDefaults();
+            if (!d) return;
+            const v = macrosHexToColor(inputEl.value);
+            if (v === null) return;
+            d[key] = macrosClampRgb24(v);
             macrosSetDirty(true);
         });
     }
+
+    bindDefaultColor(defScreenEl, 'screen_bg');
+    bindDefaultColor(defBtnEl, 'button_bg');
+    bindDefaultColor(defIconEl, 'icon_color');
+    bindDefaultColor(defLabelEl, 'label_color');
+
+    // ===== Per-screen override =====
+    const screenEnabledEl = document.getElementById('macro_screen_bg_enabled');
+    const screenColorEl = document.getElementById('macro_screen_bg');
+    function applyScreenBgFromUI() {
+        const screen = macrosGetSelectedScreenObj();
+        if (!screen || !screenEnabledEl || !screenColorEl) return;
+        if (!screenEnabledEl.checked) {
+            delete screen.screen_bg;
+        } else {
+            const v = macrosHexToColor(screenColorEl.value);
+            if (v !== null) screen.screen_bg = macrosClampRgb24(v);
+        }
+        macrosSetDirty(true);
+        macrosRenderColorFields();
+    }
+    if (screenEnabledEl) screenEnabledEl.addEventListener('change', applyScreenBgFromUI);
+    if (screenColorEl) screenColorEl.addEventListener('input', () => {
+        if (screenEnabledEl && screenEnabledEl.checked) applyScreenBgFromUI();
+    });
+
+    // ===== Per-button overrides =====
+    const btnBgEnabledEl = document.getElementById('macro_button_bg_enabled');
+    const btnBgEl = document.getElementById('macro_button_bg');
+    const iconColorEnabledEl = document.getElementById('macro_icon_color_enabled');
+    const iconColorEl = document.getElementById('macro_icon_color');
+    const labelColorEnabledEl = document.getElementById('macro_label_color_enabled');
+    const labelColorEl = document.getElementById('macro_label_color');
+
+    function applyButtonColorsFromUI() {
+        const btn = macrosGetSelectedButton();
+        if (!btn) return;
+
+        if (btnBgEnabledEl && btnBgEl) {
+            if (!btnBgEnabledEl.checked) delete btn.button_bg;
+            else {
+                const v = macrosHexToColor(btnBgEl.value);
+                if (v !== null) btn.button_bg = macrosClampRgb24(v);
+            }
+        }
+
+        if (iconColorEnabledEl && iconColorEl) {
+            if (!iconColorEnabledEl.checked) delete btn.icon_color;
+            else {
+                const v = macrosHexToColor(iconColorEl.value);
+                if (v !== null) btn.icon_color = macrosClampRgb24(v);
+            }
+        }
+
+        if (labelColorEnabledEl && labelColorEl) {
+            if (!labelColorEnabledEl.checked) delete btn.label_color;
+            else {
+                const v = macrosHexToColor(labelColorEl.value);
+                if (v !== null) btn.label_color = macrosClampRgb24(v);
+            }
+        }
+
+        macrosSetDirty(true);
+        macrosRenderColorFields();
+    }
+
+    if (btnBgEnabledEl) btnBgEnabledEl.addEventListener('change', applyButtonColorsFromUI);
+    if (btnBgEl) btnBgEl.addEventListener('input', () => {
+        if (btnBgEnabledEl && btnBgEnabledEl.checked) applyButtonColorsFromUI();
+    });
+
+    if (iconColorEnabledEl) iconColorEnabledEl.addEventListener('change', applyButtonColorsFromUI);
+    if (iconColorEl) iconColorEl.addEventListener('input', () => {
+        if (iconColorEnabledEl && iconColorEnabledEl.checked) applyButtonColorsFromUI();
+    });
+
+    if (labelColorEnabledEl) labelColorEnabledEl.addEventListener('change', applyButtonColorsFromUI);
+    if (labelColorEl) labelColorEl.addEventListener('input', () => {
+        if (labelColorEnabledEl && labelColorEnabledEl.checked) applyButtonColorsFromUI();
+    });
 
 }
 
@@ -494,6 +1357,17 @@ function macrosValidatePayload(payload) {
     if (!payload || !Array.isArray(payload.screens) || payload.screens.length !== macrosScreenCount) {
         return { valid: false, message: `Invalid payload (expected ${macrosScreenCount} screens)` };
     }
+
+    if (!payload.defaults || typeof payload.defaults !== 'object') {
+        return { valid: false, message: 'Invalid payload (missing defaults)' };
+    }
+    const d = payload.defaults;
+    for (const k of ['screen_bg', 'button_bg', 'icon_color', 'label_color']) {
+        if (typeof d[k] !== 'number' || !isFinite(d[k])) {
+            return { valid: false, message: `Invalid payload (defaults.${k} must be a number)` };
+        }
+    }
+
     for (let s = 0; s < macrosScreenCount; s++) {
         const screen = payload.screens[s];
         if (!screen || !Array.isArray(screen.buttons) || screen.buttons.length !== macrosButtonsPerScreen) {
@@ -507,19 +1381,43 @@ async function saveMacros(options = {}) {
     if (!macrosPayloadCache) return;
 
     const silent = options.silent === true;
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
 
-    // Normalize + clamp before sending.
+    // Normalize before sending.
     const payload = macrosNormalizePayload(macrosPayloadCache);
+
+    // If a user entered an emoji icon, auto-install it now and fill in `icon.id`.
+    const auto = await macrosAutoInstallEmojiIcons(payload, { silent, onProgress });
+    if (!auto.ok) {
+        // Even when running as part of the broader Home "Save" workflow, an error here
+        // should be visible to the user (otherwise they only see a generic macros save failure).
+        showMessage(auto.message || 'Failed to install emoji icons', 'error');
+        return false;
+    }
+
+    // Clamp before sending.
     for (let s = 0; s < macrosScreenCount; s++) {
         for (let b = 0; b < macrosButtonsPerScreen; b++) {
             const btn = payload.screens[s].buttons[b];
             btn.label = macrosClampString(btn.label, MACROS_LABEL_MAX);
             btn.action = (btn.action || 'none');
             btn.script = macrosClampString(btn.script, MACROS_SCRIPT_MAX);
-            btn.icon_id = macrosClampString(btn.icon_id, MACROS_ICON_ID_MAX);
+            macrosEnsureIconObject(btn);
+            btn.icon.type = (btn.icon.type || 'none').toString();
+            if (!['none', 'builtin', 'emoji', 'asset'].includes(btn.icon.type)) btn.icon.type = 'none';
+            btn.icon.id = macrosClampString(btn.icon.id, MACROS_ICON_ID_MAX);
+            btn.icon.display = macrosClampUtf8Bytes(btn.icon.display, MACROS_ICON_DISPLAY_MAX);
 
             if (!macrosActionSupportsScript(btn.action)) btn.script = '';
-            if (btn.action === 'none') btn.icon_id = '';
+            if (btn.action === 'none') {
+                btn.icon.type = 'none';
+                btn.icon.id = '';
+                btn.icon.display = '';
+            }
+            if (btn.icon.type === 'none') {
+                btn.icon.id = '';
+                btn.icon.display = '';
+            }
         }
     }
 
@@ -544,6 +1442,28 @@ async function saveMacros(options = {}) {
         macrosPayloadCache = payload;
         macrosSetDirty(false);
         macrosRenderAll();
+
+        // Best-effort: keep FFat tidy by deleting unused installed icons after macro changes.
+        // No UI control is exposed; errors are intentionally non-fatal.
+        if (onProgress) onProgress('Cleaning up unused icons...');
+        try {
+            const gcRes = await fetch(API_ICONS_GC, { method: 'POST', cache: 'no-cache' });
+            const gcData = await gcRes.json().catch(() => ({}));
+            if (gcRes.ok && gcData && gcData.success !== false) {
+                if (onProgress) {
+                    const deleted = Number(gcData.deleted || 0);
+                    const bytes = Number(gcData.bytes_freed || 0);
+                    onProgress(`Icon cleanup done (${deleted} removed, ${bytes} bytes freed).`);
+                }
+            } else {
+                console.warn('Icon cleanup failed:', gcData);
+                if (onProgress) onProgress('Icon cleanup skipped (device returned an error).');
+            }
+        } catch (e) {
+            console.warn('Icon cleanup error:', e);
+            if (onProgress) onProgress('Icon cleanup skipped (request failed).');
+        }
+
         if (!silent) showMessage('Macros saved', 'success');
         return true;
     } catch (error) {
@@ -557,7 +1477,10 @@ async function saveMacrosIfNeeded(options = {}) {
     const section = document.getElementById('macros-section');
     if (!section || section.style.display === 'none') return true;
     if (!macrosDirty) return true;
-    return await saveMacros({ silent: options.silent === true });
+    return await saveMacros({
+        silent: options.silent === true,
+        onProgress: options.onProgress,
+    });
 }
 
 function initMacrosEditor() {
@@ -573,6 +1496,7 @@ function initMacrosEditor() {
 
     // Kick off load first so macrosLoading becomes true synchronously.
     loadMacros();
+    loadIcons();
     macrosRenderAll();
 }
 
@@ -649,6 +1573,77 @@ function showMessage(message, type = 'info') {
     }, 5000);
 }
 
+// ===== REBOOT DIALOG STEP LOG =====
+
+function rebootDialogClearSteps() {
+    const details = document.getElementById('reboot-details');
+    if (!details) return;
+    details.innerHTML = '';
+    details.style.display = 'none';
+}
+
+function rebootDialogAppendStep(text) {
+    const details = document.getElementById('reboot-details');
+    if (!details) return;
+    const t = (text || '').toString().trim();
+    if (!t) return;
+
+    details.style.display = 'block';
+
+    const row = document.createElement('div');
+    row.className = 'step';
+
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+
+    const label = document.createElement('span');
+    label.textContent = t;
+
+    row.appendChild(dot);
+    row.appendChild(label);
+    details.appendChild(row);
+    details.scrollTop = details.scrollHeight;
+}
+
+function hideRebootDialog() {
+    const overlay = document.getElementById('reboot-overlay');
+    if (overlay) overlay.style.display = 'none';
+    rebootDialogClearSteps();
+}
+
+// ===== OVERLAY SCROLL LOCK =====
+
+function portalIsElementVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    return style && style.display !== 'none';
+}
+
+function portalUpdateOverlayScrollLock() {
+    const overlays = document.querySelectorAll('.reboot-overlay, .form-loading-overlay');
+    const anyOpen = Array.from(overlays).some(portalIsElementVisible);
+    document.documentElement.classList.toggle('portal-overlay-open', anyOpen);
+    document.body.classList.toggle('portal-overlay-open', anyOpen);
+}
+
+function initOverlayScrollLock() {
+    portalUpdateOverlayScrollLock();
+
+    const overlays = document.querySelectorAll('.reboot-overlay, .form-loading-overlay');
+    if (!overlays || overlays.length === 0) return;
+
+    const observer = new MutationObserver(() => {
+        portalUpdateOverlayScrollLock();
+    });
+
+    for (const el of overlays) {
+        observer.observe(el, {
+            attributes: true,
+            attributeFilter: ['style', 'class'],
+        });
+    }
+}
+
 /**
  * Show unified reboot overlay and handle reconnection
  * @param {Object} options - Configuration options
@@ -657,6 +1652,7 @@ function showMessage(message, type = 'info') {
  * @param {string} options.context - Context: 'save', 'ota', 'reboot', 'reset'
  * @param {string} options.newDeviceName - Optional new device name if changed
  * @param {boolean} options.showProgress - Show progress bar (for OTA)
+ * @param {boolean} options.autoReconnect - Start reconnection polling (default true)
  */
 function showRebootDialog(options) {
     const {
@@ -664,7 +1660,8 @@ function showRebootDialog(options) {
         message = 'Please wait while the device restarts...',
         context = 'reboot',
         newDeviceName = null,
-        showProgress = false
+        showProgress = false,
+        autoReconnect = true
     } = options;
 
     const overlay = document.getElementById('reboot-overlay');
@@ -689,6 +1686,9 @@ function showRebootDialog(options) {
     // Set dialog content
     titleElement.textContent = title;
     rebootMsg.textContent = message;
+
+    // Reset step log for the new operation.
+    rebootDialogClearSteps();
     
     // Show/hide progress bar
     if (progressContainer) {
@@ -715,6 +1715,24 @@ function showRebootDialog(options) {
         overlay.style.display = 'flex';
         return; // Don't start polling yet - OTA handler will start it after upload
     }
+
+    // Save-only (no reboot): use the same dialog surface, but don't start reconnection.
+    if (context === 'save_only') {
+        rebootSubMsg.textContent = '';
+        reconnectStatus.style.display = 'none';
+        overlay.style.display = 'flex';
+        return;
+    }
+
+    // Some callers show the dialog while doing work *before* triggering a reboot
+    // (e.g. saving macros / installing emoji icons). In that case we must not start
+    // reconnection polling yet, or it will succeed immediately and reload the page.
+    if (!autoReconnect) {
+        rebootSubMsg.textContent = '';
+        reconnectStatus.style.display = 'none';
+        overlay.style.display = 'flex';
+        return;
+    }
     
     // For save/reboot cases, show best-effort reconnection message and start polling
     const targetAddress = newDeviceName ? `http://${sanitizeForMDNS(newDeviceName)}.local` : window.location.origin;
@@ -734,6 +1752,9 @@ function showRebootDialog(options) {
 
     rebootSubMsg.innerHTML = `Attempting automatic reconnection...<br><small style="color: #888; margin-top: 8px; display: block;">If this fails, manually navigate to: <code style="color: #667eea; font-weight: 600;">${targetAddress}</code></small>`;
     reconnectStatus.style.display = 'block';
+
+    // Make the reconnect panel visibly "active" immediately (not only after the first poll tick).
+    reconnectStatus.textContent = 'Waiting for device to restart…';
 
     overlay.style.display = 'flex';
 
@@ -822,12 +1843,15 @@ function showCaptivePortalWarning() {
  */
 async function startReconnection(options) {
     const { context, newDeviceName, statusElement, messageElement } = options;
-    
-    // Initial delay: device needs time to start rebooting
-    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    const startedAt = Date.now();
+    let sawOffline = false;
+    let offlineWaits = 0;
+    const offlineWaitInterval = 1000;
+    const maxOfflineWaits = 15; // ~15s max waiting for the reboot to actually start
     
     let attempts = 0;
-    const maxAttempts = 40; // 2s initial + (40 × 3s) = 122 seconds total
+    const maxAttempts = 40;
     const checkInterval = 3000; // Poll every 3 seconds
     
     // Determine target URL
@@ -837,17 +1861,31 @@ async function startReconnection(options) {
         targetUrl = `http://${mdnsName}.local`;
     }
     
+    const urlsToTry = targetUrl
+        ? [targetUrl + API_VERSION, window.location.origin + API_VERSION]
+        : [window.location.origin + API_VERSION];
+
+    const tryAnyUrl = async () => {
+        for (const url of urlsToTry) {
+            try {
+                const response = await fetch(url, {
+                    cache: 'no-cache',
+                    mode: 'cors',
+                    signal: AbortSignal.timeout(2000),
+                });
+                if (response.ok) return true;
+            } catch (_) {
+                // ignore
+            }
+        }
+        return false;
+    };
+
     const checkConnection = async () => {
         attempts++;
-        
-        // Try new address first (if device name changed), then current location as fallback
-        const urlsToTry = targetUrl 
-            ? [targetUrl + API_VERSION, window.location.origin + API_VERSION]
-            : [window.location.origin + API_VERSION];
-        
-        // Update status with progress
-        const elapsed = 2 + (attempts * 3);
-        statusElement.textContent = `Checking connection (attempt ${attempts}/${maxAttempts}, ${elapsed}s elapsed)...`;
+
+        const elapsedSec = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+        statusElement.textContent = `Reconnecting (attempt ${attempts}/${maxAttempts}, ${elapsedSec}s)…`;
         
         for (const url of urlsToTry) {
             try {
@@ -887,8 +1925,34 @@ async function startReconnection(options) {
                 `Possible issues: WiFi connection failed, incorrect credentials, or device taking longer to boot.</div>`;
         }
     };
-    
-    checkConnection();
+
+    // Phase 1: show UI immediately, and wait until the device actually goes offline.
+    const waitForOfflineThenReconnect = async () => {
+        const elapsedSec = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+        statusElement.textContent = `Waiting for reboot to start… (${elapsedSec}s)`;
+
+        const online = await tryAnyUrl();
+        if (!online) {
+            sawOffline = true;
+        }
+
+        if (sawOffline) {
+            statusElement.textContent = 'Device offline. Waiting to reconnect…';
+            checkConnection();
+            return;
+        }
+
+        offlineWaits++;
+        if (offlineWaits >= maxOfflineWaits) {
+            // If we never observe an offline transition, proceed anyway.
+            checkConnection();
+            return;
+        }
+
+        setTimeout(waitForOfflineThenReconnect, offlineWaitInterval);
+    };
+
+    waitForOfflineThenReconnect();
 }
 
 /**
@@ -1461,26 +2525,37 @@ async function saveConfig(event) {
         showMessage(validation.message, 'error');
         return;
     }
-
-    // Home page: persist macros as part of the same save workflow.
-    // Do this before showing the reboot overlay so we can surface errors.
-    const macrosOk = await saveMacrosIfNeeded({ silent: true });
-    if (!macrosOk) {
-        showMessage('Error saving macros (configuration not saved)', 'error');
-        return;
-    }
-    
     const currentDeviceNameField = document.getElementById('device_name');
     const currentDeviceName = currentDeviceNameField ? currentDeviceNameField.value : null;
     
-    // Show overlay immediately
+    // Always use the blocking dialog for Save & Reboot.
     showRebootDialog({
         title: 'Saving Configuration',
-        message: 'Saving configuration...',
+        message: 'Saving…',
         context: 'save',
         newDeviceName: currentDeviceName
     });
-    
+
+    rebootDialogAppendStep('Validating settings…');
+
+    // Home page: persist macros as part of the same save workflow.
+    const needMacrosSave = (currentPage === 'home' && typeof macrosDirty !== 'undefined' && macrosDirty);
+    if (needMacrosSave) {
+        rebootDialogAppendStep('Saving macros…');
+    }
+
+    const macrosOk = await saveMacrosIfNeeded({
+        silent: true,
+        onProgress: needMacrosSave ? (text) => rebootDialogAppendStep(text) : undefined,
+    });
+    if (!macrosOk) {
+        hideRebootDialog();
+        showMessage('Error saving macros (configuration not saved)', 'error');
+        return;
+    }
+
+    rebootDialogAppendStep('Saving configuration…');
+
     try {
         const response = await fetch(API_CONFIG, {
             method: 'POST',
@@ -1498,16 +2573,19 @@ async function saveConfig(event) {
         if (result.success) {
             // Update dialog message
             document.getElementById('reboot-message').textContent = 'Configuration saved. Device is rebooting...';
+            rebootDialogAppendStep('Saved. Device is rebooting…');
         }
     } catch (error) {
         // If save request fails (e.g., device already rebooting), assume success
         if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
             document.getElementById('reboot-message').textContent = 'Configuration saved. Device is rebooting...';
+            rebootDialogAppendStep('Saved. Device is rebooting…');
         } else {
             // Hide overlay and show error
-            document.getElementById('reboot-overlay').style.display = 'none';
+            hideRebootDialog();
             showMessage('Error saving configuration: ' + error.message, 'error');
             console.error('Save error:', error);
+            return;
         }
     }
 }
@@ -1518,9 +2596,27 @@ async function saveConfig(event) {
 async function saveOnly(event) {
     event.preventDefault();
 
+    // Always use the blocking dialog for Save (no reboot).
+    showRebootDialog({
+        title: 'Saving Configuration',
+        message: 'Saving…',
+        context: 'save_only'
+    });
+
+    rebootDialogAppendStep('Validating settings…');
+
     // Home page: persist macros as part of the same save workflow.
-    const macrosOk = await saveMacrosIfNeeded({ silent: true });
+    const needMacrosSave = (currentPage === 'home' && typeof macrosDirty !== 'undefined' && macrosDirty);
+    if (needMacrosSave) {
+        rebootDialogAppendStep('Saving macros…');
+    }
+
+    const macrosOk = await saveMacrosIfNeeded({
+        silent: true,
+        onProgress: needMacrosSave ? (text) => rebootDialogAppendStep(text) : undefined,
+    });
     if (!macrosOk) {
+        hideRebootDialog();
         showMessage('Error saving macros (configuration not saved)', 'error');
         return;
     }
@@ -1531,12 +2627,13 @@ async function saveOnly(event) {
     // Validate configuration
     const validation = validateConfig(config);
     if (!validation.valid) {
+        hideRebootDialog();
         showMessage(validation.message, 'error');
         return;
     }
     
     try {
-        showMessage('Saving configuration...', 'info');
+        rebootDialogAppendStep('Saving configuration…');
         
         // Add no_reboot parameter to prevent automatic reboot
         const response = await fetch(API_CONFIG + '?no_reboot=1', {
@@ -1553,11 +2650,15 @@ async function saveOnly(event) {
         
         const result = await response.json();
         if (result.success) {
-            showMessage('Configuration saved successfully!', 'success');
+            document.getElementById('reboot-message').textContent = 'Configuration saved.';
+            rebootDialogAppendStep('Saved successfully.');
+            setTimeout(() => hideRebootDialog(), 1000);
         } else {
+            hideRebootDialog();
             showMessage('Failed to save configuration', 'error');
         }
     } catch (error) {
+        hideRebootDialog();
         showMessage('Error saving configuration: ' + error.message, 'error');
         console.error('Save error:', error);
     }
@@ -1876,6 +2977,9 @@ async function handleScreenChange(event) {
  * Initialize page on DOM ready
  */
 document.addEventListener('DOMContentLoaded', () => {
+    // Prevent background page scroll whenever any overlay is open.
+    initOverlayScrollLock();
+
     // Initialize navigation highlighting
     initNavigation();
     
@@ -1934,6 +3038,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Add screen selection dropdown event handler
+
+    // Home page: DuckyScript help modal
+    initDuckyHelpDialog();
     const screenSelect = document.getElementById('screen_selection');
     if (screenSelect) {
         screenSelect.addEventListener('change', handleScreenChange);

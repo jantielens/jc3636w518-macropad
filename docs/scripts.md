@@ -120,9 +120,29 @@ This is invoked automatically by `build.sh` when:
 **Manual usage:**
 ```bash
 python3 tools/png2lvgl_assets.py assets/png src/app/png_assets.cpp src/app/png_assets.h --prefix img_
+
+## tools/fetch_material_symbols.py
+
+Fetches icons from Google Material (the set behind fonts.google.com/icons) and rasterizes them to 64×64 PNGs.
+
+Implementation note: it tries a Material Symbols URL first, and if that returns 404 it falls back to the older (and currently more reliable) **Material Icons Round** endpoint on `fonts.gstatic.com` (rounded filled).
+
+Intended usage in this repo:
+- Put the generated PNGs into `assets/icons_mono/`.
+- The build will convert them into LVGL alpha-mask assets and tint them at runtime.
+
+Example (filled icons, rounded family):
+
+`python3 tools/fetch_material_symbols.py --family rounded --fill 1 --size 64 --out-dir assets/icons_mono volume_up volume_off play_pause`
+
+Starter list (~100 icons):
+
+`python3 tools/fetch_material_symbols.py --names-file tools/material_icons.txt --family rounded --fill 1 --size 64 --out-dir assets/icons_mono`
+
+If you want to keep going when a specific icon name is missing, add `--skip-missing`.
 ```
 
-**Requirements:** Python 3 + Pillow (`python3 -m pip install --user pillow`).
+**Requirements:** Python 3 + `cairosvg` (`python3 -m pip install --user cairosvg`).
 
 ---
 

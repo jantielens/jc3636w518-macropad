@@ -679,6 +679,9 @@ usbipd list
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+This project may also include optional third-party icon assets:
+- Twemoji graphics (used for portal-downloaded emoji icons) are licensed under CC BY 4.0 and require attribution.
+
 ---
 
 **Made with ❤️ for ESP32 developers**

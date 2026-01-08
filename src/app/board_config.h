@@ -218,6 +218,16 @@
 #define HAS_IMAGE_API false
 #endif
 
+// ============================================================================
+// Icon Rendering (Macro buttons)
+// ============================================================================
+// Enables LVGL image widget usage for rendering compiled icon assets on buttons.
+// This is independent from HAS_IMAGE_API so projects can use icons without the
+// web-based Image API feature set.
+#ifndef HAS_ICONS
+#define HAS_ICONS false
+#endif
+
 // Image API configuration (only relevant when HAS_IMAGE_API is true)
 // Max bytes accepted for full image uploads (JPEG).
 #ifndef IMAGE_API_MAX_SIZE_BYTES

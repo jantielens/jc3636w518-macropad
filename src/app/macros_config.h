@@ -26,6 +26,12 @@
 #define MACROS_LABEL_MAX_LEN 16
 #define MACROS_SCRIPT_MAX_LEN 256
 #define MACROS_ICON_ID_MAX_LEN 32
+// UTF-8 bytes (not Unicode code points). Keep generous to support ZWJ emoji sequences.
+#define MACROS_ICON_DISPLAY_MAX_LEN 64
+
+// Color values are stored as 0xRRGGBB (RGB only).
+// Use 0xFFFFFFFF to indicate an unset optional override (fall back to defaults).
+#define MACROS_COLOR_UNSET 0xFFFFFFFFu
 
 // Template IDs are stored per macro screen.
 // Keep this large enough for descriptive IDs like "round_stack_sides_5".
@@ -38,14 +44,43 @@ enum class MacroButtonAction : uint8_t {
     NavNextScreen = 3,
 };
 
+enum class MacroIconType : uint8_t {
+    None = 0,
+    Builtin = 1, // compiled monochrome (mask) icons
+    Emoji = 2,   // Twemoji (installed to FFat)
+    Asset = 3,   // user-uploaded image (installed to FFat)
+};
+
+struct MacroButtonIcon {
+    MacroIconType type;
+    // Stable lookup ID used by firmware (e.g. "mic_off", "emoji_u1f381", "user_ab12cd34").
+    char id[MACROS_ICON_ID_MAX_LEN];
+    // Human-friendly display value for the portal UI (emoji literal or filename/label).
+    char display[MACROS_ICON_DISPLAY_MAX_LEN];
+};
+
 struct MacroButtonConfig {
     char label[MACROS_LABEL_MAX_LEN];
     MacroButtonAction action;
     char script[MACROS_SCRIPT_MAX_LEN];
-    char icon_id[MACROS_ICON_ID_MAX_LEN];
+    MacroButtonIcon icon;
+
+    // Optional per-button appearance overrides (0xRRGGBB or MACROS_COLOR_UNSET).
+    uint32_t button_bg;
+    uint32_t icon_color;  // Only used for mask icons (IconKind::Mask)
+    uint32_t label_color;
 };
 
 struct MacroConfig {
+    // Global defaults used when per-screen/per-button values are unset.
+    uint32_t default_screen_bg;
+    uint32_t default_button_bg;
+    uint32_t default_icon_color;
+    uint32_t default_label_color;
+
+    // Optional per-screen background overrides (0xRRGGBB or MACROS_COLOR_UNSET).
+    uint32_t screen_bg[MACROS_SCREEN_COUNT];
+
     // Template id per macro screen (NUL-terminated).
     // Stored alongside buttons in the same blob/file.
     char template_id[MACROS_SCREEN_COUNT][MACROS_TEMPLATE_ID_MAX_LEN];

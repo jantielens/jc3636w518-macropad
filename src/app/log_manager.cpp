@@ -8,6 +8,20 @@
 #include "log_manager.h"
 #include <stdarg.h>
 
+namespace {
+
+static inline bool serial_ready_for_logging() {
+    // On some ESP32-Sx USB-CDC configurations, printing very early when no host has
+    // opened the CDC port can be unstable. If no host is connected, drop logs.
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+    return (bool)Serial;
+#else
+    return true;
+#endif
+}
+
+}
+
 // Initialize static members
 unsigned long LogManager::startTimes[3] = {0, 0, 0};
 uint8_t LogManager::nestLevel = 0;
@@ -40,6 +54,7 @@ const char* LogManager::indent() {
 
 // Begin a log block - atomic write
 void LogManager::logBegin(const char* module) {
+    if (!serial_ready_for_logging()) return;
     char line[128];
     snprintf(line, sizeof(line), "%s[%s] Starting...\n", indent(), module);
     Serial.print(line);
@@ -57,6 +72,7 @@ void LogManager::logBegin(const char* module) {
 
 // Add a line to current block - atomic write
 void LogManager::logLine(const char* message) {
+    if (!serial_ready_for_logging()) return;
     char line[160];
     snprintf(line, sizeof(line), "%s%s\n", indent(), message);
     Serial.print(line);
@@ -64,6 +80,7 @@ void LogManager::logLine(const char* message) {
 
 // Add a formatted line (printf-style) - atomic write
 void LogManager::logLinef(const char* format, ...) {
+    if (!serial_ready_for_logging()) return;
     char msgbuf[128];
     va_list args;
     va_start(args, format);
@@ -77,6 +94,7 @@ void LogManager::logLinef(const char* format, ...) {
 
 // End a log block - atomic write
 void LogManager::logEnd(const char* message) {
+    if (!serial_ready_for_logging()) return;
     // Decrement nesting level first (but don't underflow)
     if (nestLevel > 0) {
         nestLevel--;
@@ -100,6 +118,7 @@ void LogManager::logEnd(const char* message) {
 
 // Single-line logging with timing - atomic write to prevent interleaving
 void LogManager::logMessage(const char* module, const char* msg) {
+    if (!serial_ready_for_logging()) return;
     unsigned long start = millis();
     char line[192];
     snprintf(line, sizeof(line), "%s[%s] %s (%lums)\n", indent(), module, msg, millis() - start);
@@ -107,6 +126,7 @@ void LogManager::logMessage(const char* module, const char* msg) {
 }
 
 void LogManager::logMessagef(const char* module, const char* format, ...) {
+    if (!serial_ready_for_logging()) return;
     unsigned long start = millis();
     
     char msgbuf[128];
@@ -136,10 +156,12 @@ void LogManager::logQuickf(const char* module, const char* format, ...) {
 
 // Write single byte (required by Print class)
 size_t LogManager::write(uint8_t c) {
+    if (!serial_ready_for_logging()) return 1;
     return Serial.write(c);
 }
 
 // Write buffer of bytes (required by Print class)
 size_t LogManager::write(const uint8_t *buffer, size_t size) {
+    if (!serial_ready_for_logging()) return size;
     return Serial.write(buffer, size);
 }

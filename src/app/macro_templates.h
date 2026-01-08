@@ -8,6 +8,7 @@
 namespace macro_templates {
 
 static constexpr const char* kTemplateRoundRing9 = "round_ring_9";
+static constexpr const char* kTemplateRoundPie8 = "round_pie_8";
 static constexpr const char* kTemplateStackSides5 = "round_stack_sides_5";
 static constexpr const char* kTemplateWideSides3 = "round_wide_sides_3";
 static constexpr const char* kTemplateSplitSides4 = "round_split_sides_4";

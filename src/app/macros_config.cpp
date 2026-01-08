@@ -20,7 +20,7 @@
 #define KEY_BLOB  "b"
 
 #define MACROS_MAGIC 0x4D414352u // 'MACR'
-#define MACROS_VERSION 5
+#define MACROS_VERSION 7
 
 static Preferences prefs;
 
@@ -167,6 +167,16 @@ void macros_config_set_defaults(MacroConfig* cfg) {
     if (!cfg) return;
     memset(cfg, 0, sizeof(MacroConfig));
 
+    // Global defaults (RGB only: 0xRRGGBB)
+    cfg->default_screen_bg = 0x000000; // black
+    cfg->default_button_bg = 0x1E1E1E; // rgb(30,30,30)
+    cfg->default_icon_color = 0xFFFFFF; // white
+    cfg->default_label_color = 0xFFFFFF; // white
+
+    for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
+        cfg->screen_bg[s] = MACROS_COLOR_UNSET;
+    }
+
     for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
         strlcpy(cfg->template_id[s], "round_ring_9", sizeof(cfg->template_id[s]));
     }
@@ -176,7 +186,14 @@ void macros_config_set_defaults(MacroConfig* cfg) {
             cfg->buttons[s][b].action = MacroButtonAction::None;
             cfg->buttons[s][b].label[0] = '\0';
             cfg->buttons[s][b].script[0] = '\0';
-            cfg->buttons[s][b].icon_id[0] = '\0';
+
+            cfg->buttons[s][b].icon.type = MacroIconType::None;
+            cfg->buttons[s][b].icon.id[0] = '\0';
+            cfg->buttons[s][b].icon.display[0] = '\0';
+
+            cfg->buttons[s][b].button_bg = MACROS_COLOR_UNSET;
+            cfg->buttons[s][b].icon_color = MACROS_COLOR_UNSET;
+            cfg->buttons[s][b].label_color = MACROS_COLOR_UNSET;
         }
     }
 }
