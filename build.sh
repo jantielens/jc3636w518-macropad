@@ -135,6 +135,15 @@ build_board() {
         if [[ -n "${async_tcp_stack_size:-}" ]]; then
             EXTRA_GLOBAL_DEFINES+=" -DCONFIG_ASYNC_TCP_STACK_SIZE=${async_tcp_stack_size}"
         fi
+
+        # NimBLE-Arduino can optionally allocate its host memory from PSRAM.
+        # The library only sees this if we pass it as a global compile define.
+        nimble_mem_mode_external=$(grep -E '^[[:space:]]*#define[[:space:]]+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL[[:space:]]+' "$board_overrides_file" \
+            | head -n 1 \
+            | awk '{print $3}')
+        if [[ -n "${nimble_mem_mode_external:-}" ]]; then
+            EXTRA_GLOBAL_DEFINES+=" -DCONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=${nimble_mem_mode_external}"
+        fi
     fi
 
     # Always embed board name for runtime identification (used by firmware update UX).

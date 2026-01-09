@@ -23,6 +23,10 @@
 // Enable BLE HID keyboard support.
 #define HAS_BLE_KEYBOARD true
 
+// NimBLE: prefer external PSRAM for host allocations (saves internal RAM).
+// This must also be passed as a global -D so the NimBLE-Arduino library compiles with it.
+#define CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL 1
+
 // Enable Image Upload API on this board
 // Enable Image API on this board.
 #define HAS_IMAGE_API true
