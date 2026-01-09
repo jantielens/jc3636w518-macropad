@@ -112,6 +112,32 @@ static bool g_macros_body_in_progress = false;
 // If MACROS_* dimensions or max string sizes are increased, adjust this accordingly.
 static constexpr size_t kMacrosJsonDocCapacity = 65536;
 
+struct MacrosJsonAllocator {
+    void* allocate(size_t size) {
+#if SOC_SPIRAM_SUPPORTED
+        if (psramFound()) {
+            void* p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (p) return p;
+        }
+#endif
+        return heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    void deallocate(void* ptr) {
+        heap_caps_free(ptr);
+    }
+
+    void* reallocate(void* ptr, size_t new_size) {
+#if SOC_SPIRAM_SUPPORTED
+        if (psramFound()) {
+            void* p = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (p) return p;
+        }
+#endif
+        return heap_caps_realloc(ptr, new_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+};
+
 // Protect macros upload globals from theoretical cross-task interleaving.
 static portMUX_TYPE g_macros_body_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -582,14 +608,22 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
         return;
     }
 
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    // Capture heap state right before we allocate/parse the JSON document.
+    device_telemetry_log_memory_snapshot("http_macros_post_begin");
+#endif
+
     // Parse JSON body
-    DynamicJsonDocument doc(kMacrosJsonDocCapacity);
+    BasicJsonDocument<MacrosJsonAllocator> doc(kMacrosJsonDocCapacity);
     DeserializationError error = deserializeJson(doc, g_macros_body, total);
 
     macros_body_reset();
 
     if (error) {
         Logger.logMessagef("Macros", "JSON parse error: %s", error.c_str());
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+        device_telemetry_log_memory_snapshot("http_macros_post_parse_fail");
+#endif
         if (error == DeserializationError::NoMemory) {
             request->send(413, "application/json", "{\"success\":false,\"message\":\"JSON body too large\"}");
             return;
@@ -597,6 +631,10 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
         request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
         return;
     }
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    device_telemetry_log_memory_snapshot("http_macros_post_parsed");
+#endif
 
     // Basic shape validation
     if (!doc.containsKey("screens") || !doc["screens"].is<JsonArray>()) {
@@ -739,9 +777,16 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
 
     if (!macros_config_save(next)) {
         free(next);
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+        device_telemetry_log_memory_snapshot("http_macros_post_save_fail");
+#endif
         request->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to save\"}");
         return;
     }
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    device_telemetry_log_memory_snapshot("http_macros_post_saved");
+#endif
 
     g_macros_loaded = true;
 
@@ -749,6 +794,10 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     memcpy(&macro_config, next, sizeof(MacroConfig));
 
     free(next);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    device_telemetry_log_memory_snapshot("http_macros_post_applied");
+#endif
 
     request->send(200, "application/json", "{\"success\":true}\n");
 }
@@ -1196,6 +1245,19 @@ static volatile bool pending_image_hide_request = false;
 
 // ===== WEB SERVER HANDLERS =====
 
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+static bool s_logged_http_root = false;
+static bool s_logged_http_network = false;
+static bool s_logged_http_firmware = false;
+
+// AsyncWebServer handlers run on the AsyncTCP task; log memory snapshots from
+// the main loop (web_portal_handle) to avoid extra allocator pressure in the
+// networking task.
+static volatile bool s_pending_http_root = false;
+static volatile bool s_pending_http_network = false;
+static volatile bool s_pending_http_firmware = false;
+#endif
+
 static AsyncWebServerResponse *begin_gzipped_asset_response(
     AsyncWebServerRequest *request,
     const char *content_type,
@@ -1236,6 +1298,12 @@ void handleRoot(AsyncWebServerRequest *request) {
             "no-store"
         );
         request->send(response);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+        if (!s_logged_http_root) {
+            s_pending_http_root = true;
+        }
+#endif
     }
 }
 
@@ -1268,6 +1336,12 @@ void handleNetwork(AsyncWebServerRequest *request) {
         "no-store"
     );
     request->send(response);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    if (!s_logged_http_network) {
+        s_pending_http_network = true;
+    }
+#endif
 }
 
 // Serve firmware update page
@@ -1286,6 +1360,12 @@ void handleFirmware(AsyncWebServerRequest *request) {
         "no-store"
     );
     request->send(response);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    if (!s_logged_http_firmware) {
+        s_pending_http_firmware = true;
+    }
+#endif
 }
 
 // Serve CSS
@@ -2300,6 +2380,25 @@ void web_portal_handle() {
     if (ap_mode_active) {
         dnsServer.processNextRequest();
     }
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    // Emit deferred per-page memory snapshots from the main loop.
+    if (s_pending_http_root && !s_logged_http_root) {
+        s_pending_http_root = false;
+        s_logged_http_root = true;
+        device_telemetry_log_memory_snapshot("http_root");
+    }
+    if (s_pending_http_network && !s_logged_http_network) {
+        s_pending_http_network = false;
+        s_logged_http_network = true;
+        device_telemetry_log_memory_snapshot("http_network");
+    }
+    if (s_pending_http_firmware && !s_logged_http_firmware) {
+        s_pending_http_firmware = false;
+        s_logged_http_firmware = true;
+        device_telemetry_log_memory_snapshot("http_firmware");
+    }
+#endif
 }
 
 // Check if in AP mode
