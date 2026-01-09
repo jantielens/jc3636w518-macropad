@@ -1415,7 +1415,14 @@ void handleGetConfig(AsyncWebServerRequest *request) {
     }
     
     // Create JSON response (don't include passwords)
-    StaticJsonDocument<2304> doc;
+    // NOTE: AsyncWebServer handlers execute on the AsyncTCP task; avoid large stack allocations.
+    static constexpr size_t kConfigJsonDocCapacity = 2304;
+    BasicJsonDocument<MacrosJsonAllocator> doc(kConfigJsonDocCapacity);
+    if (doc.capacity() == 0) {
+        Logger.logMessage("Portal", "ERROR: /api/config OOM (JsonDocument allocation failed)");
+        request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
     doc["wifi_ssid"] = current_config->wifi_ssid;
     doc["wifi_password"] = ""; // Don't send password
     doc["device_name"] = current_config->device_name;
@@ -1481,7 +1488,14 @@ void handlePostConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     }
     
     // Parse JSON body
-    StaticJsonDocument<2304> doc;
+    // NOTE: AsyncWebServer handlers execute on the AsyncTCP task; avoid large stack allocations.
+    static constexpr size_t kConfigJsonDocCapacity = 2304;
+    BasicJsonDocument<MacrosJsonAllocator> doc(kConfigJsonDocCapacity);
+    if (doc.capacity() == 0) {
+        Logger.logMessage("Portal", "ERROR: /api/config OOM (JsonDocument allocation failed)");
+        request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
     DeserializationError error = deserializeJson(doc, data, len);
     
     if (error) {
