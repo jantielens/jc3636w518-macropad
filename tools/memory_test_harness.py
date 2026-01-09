@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import datetime as dt
 import http.client
 import json
@@ -47,6 +48,10 @@ SCENARIOS: dict[str, dict[str, Any]] = {
         "title": "Portal page load",
         "description": "Reboot, wait for readiness, then GET /, /network.html, /firmware.html and capture post-interaction [Mem] hb.",
     },
+    "s6": {
+        "title": "Browser-like portal load",
+        "description": "Reboot, wait for readiness, then GET / + portal assets and fetch key /api/* endpoints in parallel (mimics a real browser first load).",
+    },
     "prompt": {
         "title": "Manual interaction",
         "description": "Reboot, wait for readiness, then pause for manual device/UI interaction (no scripted HTTP steps).",
@@ -66,6 +71,8 @@ SCENARIO_ALIASES: dict[str, str] = {
     "s1_boot_idle": "s1",
     "s2_portal_load": "s2",
     "portal": "s2",
+    "s6_browser": "s6",
+    "browser": "s6",
     "manual": "prompt",
     "s4_macros": "s4",
     "macros": "s4",
@@ -122,6 +129,16 @@ _FW_RE = re.compile(r"Firmware:\s*v(?P<ver>[0-9A-Za-z._-]+)")
 _ESP_ROM_RE = re.compile(r"^ESP-ROM:esp32", re.IGNORECASE)
 _ESP_RST_RE = re.compile(r"^rst:", re.IGNORECASE)
 _SETUP_COMPLETE_RE = re.compile(r"^\[Main\]\s+Setup complete\b")
+
+# Crash markers (best-effort). We log a compact summary in derived metrics.
+_PANIC_MARKERS: list[tuple[str, re.Pattern[str]]] = [
+    ("guru_meditation", re.compile(r"Guru Meditation Error", re.IGNORECASE)),
+    ("panic", re.compile(r"panic'ed", re.IGNORECASE)),
+    ("stack_canary", re.compile(r"Stack canary watchpoint triggered", re.IGNORECASE)),
+    ("backtrace", re.compile(r"^Backtrace:", re.IGNORECASE)),
+    ("abort", re.compile(r"abort\(\)", re.IGNORECASE)),
+    ("brownout", re.compile(r"brownout", re.IGNORECASE)),
+]
 
 
 def _now_iso() -> str:
@@ -360,6 +377,8 @@ class HarnessConfig:
     health: bool
     pages: bool
     echo_serial: bool
+    browser_parallelism: int
+    browser_health_count: int
 
 
 class Harness:
@@ -468,6 +487,17 @@ class Harness:
                 worst_str = ", ".join(f"{w.get('name')} {w.get('stack_rem')}B" for w in worst if isinstance(w, dict))
                 if worst_str:
                     lines.append(f"- Worst stack margins: {worst_str}")
+
+        panic = d.get("panic") if isinstance(d, dict) else None
+        if isinstance(panic, dict) and panic.get("detected"):
+            lines.append("")
+            lines.append("## Panic")
+            kind = panic.get("kind") or "unknown"
+            line_no = panic.get("line_no")
+            marker = panic.get("line")
+            lines.append(f"- Detected: yes (kind={kind}, line={line_no})")
+            if marker:
+                lines.append(f"- Marker: {marker}")
 
         lines.append("")
         lines.append("## Artifacts")
@@ -799,6 +829,8 @@ class Harness:
                 rc = self._scenario_s1()
             elif scenario in ("s2", "s2_portal_load", "portal"):
                 rc = self._scenario_s2()
+            elif scenario in ("s6", "s6_browser", "browser"):
+                rc = self._scenario_s6()
             elif scenario in ("s4", "macros", "s4_macros"):
                 rc = self._scenario_s4()
             elif scenario in ("s5", "mqtt", "s5_mqtt"):
@@ -829,23 +861,23 @@ class Harness:
             self.serial.stop()
 
     def _derive_metrics(self) -> dict[str, Any]:
+        derived: dict[str, Any] = {}
+
         # Parse mem.jsonl for quick min summaries
-        mins: dict[str, Any] = {}
+        recs: list[dict[str, Any]] = []
         try:
             with open(self.paths["mem"], "r", encoding="utf-8") as f:
                 recs = [json.loads(line) for line in f if line.strip()]
         except Exception:
-            return mins
+            recs = []
 
-        if not recs:
-            return mins
-
-        mins["hin_min"] = min(r.get("hin", 1 << 60) for r in recs)
-        mins["hm_min"] = min(r.get("hm", 1 << 60) for r in recs)
-        mins["pf_min"] = min(r.get("pf", 1 << 60) for r in recs)
-        mins["pm_min"] = min(r.get("pm", 1 << 60) for r in recs)
-        mins["frag_max"] = max(r.get("frag", 0) for r in recs)
-        mins["tags"] = sorted({r.get("tag") for r in recs if r.get("tag")})
+        if recs:
+            derived["hin_min"] = min(r.get("hin", 1 << 60) for r in recs)
+            derived["hm_min"] = min(r.get("hm", 1 << 60) for r in recs)
+            derived["pf_min"] = min(r.get("pf", 1 << 60) for r in recs)
+            derived["pm_min"] = min(r.get("pm", 1 << 60) for r in recs)
+            derived["frag_max"] = max(r.get("frag", 0) for r in recs)
+            derived["tags"] = sorted({r.get("tag") for r in recs if r.get("tag")})
 
         # Parse events.jsonl for one-shot tripwire info (if present).
         tripwire: Optional[dict[str, Any]] = None
@@ -897,11 +929,32 @@ class Harness:
             except Exception:
                 pass
 
-            mins["tripwire"] = tw_summary
+            derived["tripwire"] = tw_summary
         else:
-            mins["tripwire"] = {"fired": False}
+            derived["tripwire"] = {"fired": False}
 
-        return mins
+        # Best-effort crash detection from serial log.
+        derived["panic"] = self._detect_panic_from_serial()
+
+        return derived
+
+    def _detect_panic_from_serial(self) -> dict[str, Any]:
+        try:
+            with open(self.paths["serial"], "r", encoding="utf-8") as f:
+                for idx, line in enumerate(f, start=1):
+                    s = line.rstrip("\n")
+                    for kind, rx in _PANIC_MARKERS:
+                        if rx.search(s):
+                            return {
+                                "detected": True,
+                                "kind": kind,
+                                "line": s,
+                                "line_no": idx,
+                            }
+        except Exception as e:
+            return {"detected": False, "error": str(e)}
+
+        return {"detected": False}
 
     def _scenario_s1(self) -> int:
         # Baseline: capture a 'stable' health snapshot after IP, then wait for first heartbeat.
@@ -966,6 +1019,58 @@ class Harness:
         self.capture_health_when_stable(label="s2_after")
         return 0
 
+    def _scenario_s6(self) -> int:
+        # Advanced browser-like flow:
+        #  1) Full home load (/)
+        #  2) Save settings + macros (no reboot)
+        #  3) Full network page load (/network.html)
+        self.capture_health_when_stable(label="s6_before")
+
+        ip = self.current_ip()
+        if not ip:
+            print("[harness] No IP; cannot run S6 HTTP steps")
+            return 1
+
+        base = f"http://{ip}"
+
+        self._log_note("S6: phase 1/3 - home page load")
+        self._browser_get_static_bundle(base, page_path="/")
+        self._browser_api_burst(
+            base,
+            ["/api/mode", "/api/config", "/api/info", "/api/macros", "/api/icons"],
+            timeout_s=20.0,
+            include_health_count=int(self.cfg.browser_health_count),
+        )
+
+        time.sleep(0.5)
+
+        self._log_note("S6: phase 2/3 - save macros + config (no reboot)")
+        if not self._save_macros_apply(base):
+            self._log_note("S6: macros apply failed")
+            return 1
+        if not self._save_config_no_reboot(base):
+            self._log_note("S6: config save (no reboot) failed")
+            return 1
+
+        time.sleep(0.5)
+
+        self._log_note("S6: phase 3/3 - network page load")
+        self._browser_get_static_bundle(base, page_path="/network.html")
+        self._browser_api_burst(
+            base,
+            ["/api/mode", "/api/config", "/api/info"],
+            timeout_s=20.0,
+            include_health_count=int(self.cfg.browser_health_count),
+        )
+
+        # Give the device a moment to settle.
+        time.sleep(2.0)
+
+        # Ensure we capture at least one post-run memory snapshot.
+        self.wait_for(re.compile(r"\[Mem\]\s+hb\b"), timeout_s=90.0, label="[Mem] hb (post S6)")
+        self.capture_health_when_stable(label="s6_after")
+        return 0
+
     def _log_http_event(self, *, method: str, url: str, status: int, headers: dict[str, str]) -> None:
         content_length = headers.get("content-length")
         content_type = headers.get("content-type")
@@ -987,6 +1092,158 @@ class Harness:
                 )
                 + "\n"
             )
+
+    def _log_note(self, note: str) -> None:
+        with open(self.paths["structured"], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": _now_iso(), "type": "note", "note": note}, sort_keys=True) + "\n")
+
+    def _http_parallel_get(self, urls: list[str], *, timeout_s: float) -> list[tuple[str, int, dict[str, str]]]:
+        """GET multiple URLs concurrently and return (url, status, headers) results."""
+
+        if not urls:
+            return []
+
+        max_workers = max(1, int(self.cfg.browser_parallelism or 1))
+
+        def worker(u: str) -> tuple[str, int, dict[str, str]]:
+            status, headers, _ = self.http("GET", u, timeout_s=timeout_s, read_body=True)
+            return (u, status, headers)
+
+        results: list[tuple[str, int, dict[str, str]]] = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(worker, u) for u in urls]
+            for fut in concurrent.futures.as_completed(futures):
+                try:
+                    results.append(fut.result())
+                except Exception:
+                    results.append(("unknown", 0, {}))
+
+        by_url = {u: (u, s, h) for (u, s, h) in results if u != "unknown"}
+        return [by_url.get(u, (u, 0, {})) for u in urls]
+
+    def _browser_get_static_bundle(self, base: str, *, page_path: str) -> None:
+        # Fetch HTML + shared CSS/JS. This mirrors what a browser typically does on a fresh load.
+        for p in (page_path, "/portal.css", "/portal.js"):
+            url = f"{base}{p}"
+            print(f"[harness] GET {url}")
+            status, headers, _ = self.http("GET", url, timeout_s=10.0, read_body=True)
+            self._log_http_event(method="GET", url=url, status=status, headers=headers)
+            time.sleep(0.1)
+
+    def _browser_api_burst(
+        self,
+        base: str,
+        api_paths: list[str],
+        *,
+        timeout_s: float,
+        include_health_count: int,
+    ) -> None:
+        paths = list(api_paths)
+        if self.cfg.health:
+            paths.extend(["/api/health"] * max(0, int(include_health_count)))
+        urls = [f"{base}{p}" for p in paths]
+        if not urls:
+            return
+        print(f"[harness] GET burst ({len(urls)} req, parallel={self.cfg.browser_parallelism})")
+        burst = self._http_parallel_get(urls, timeout_s=timeout_s)
+        for (u, status, headers) in burst:
+            self._log_http_event(method="GET", url=u, status=status, headers=headers)
+
+    def _save_config_no_reboot(self, base: str) -> bool:
+        # Mimic portal.js saveOnly(): POST /api/config?no_reboot=1 with a subset of form fields.
+        get_url = f"{base}/api/config"
+        print(f"[harness] GET {get_url}")
+        status, headers, body = self.http("GET", get_url, timeout_s=10.0, read_body=True)
+        self._log_http_event(method="GET", url=get_url, status=status, headers=headers)
+        if status != 200:
+            return False
+
+        try:
+            doc = json.loads(body)
+        except Exception:
+            return False
+
+        if not isinstance(doc, dict):
+            return False
+
+        allowed_fields = {
+            "wifi_ssid",
+            "wifi_password",
+            "device_name",
+            "fixed_ip",
+            "subnet_mask",
+            "gateway",
+            "dns1",
+            "dns2",
+            "dummy_setting",
+            "mqtt_host",
+            "mqtt_port",
+            "mqtt_username",
+            "mqtt_password",
+            "mqtt_interval_seconds",
+            "basic_auth_enabled",
+            "basic_auth_username",
+            "basic_auth_password",
+            "backlight_brightness",
+            "screen_saver_enabled",
+            "screen_saver_timeout_seconds",
+            "screen_saver_fade_out_ms",
+            "screen_saver_fade_in_ms",
+            "screen_saver_wake_on_touch",
+        }
+
+        payload: dict[str, Any] = {}
+        for k in allowed_fields:
+            if k in doc:
+                payload[k] = doc.get(k)
+
+        # Never overwrite stored secrets in a harness run.
+        for secret_field in ("wifi_password", "mqtt_password", "basic_auth_password"):
+            if secret_field in payload:
+                payload[secret_field] = ""
+
+        post_url = f"{base}/api/config?no_reboot=1"
+        print(f"[harness] POST {post_url} (save config, no reboot)")
+        status, headers, _ = self.http("POST", post_url, json_body=payload, timeout_s=15.0, read_body=True)
+        self._log_http_event(method="POST", url=post_url, status=status, headers=headers)
+        return status == 200
+
+    def _save_macros_apply(self, base: str) -> bool:
+        # Similar to S4, but without screen-switch noise and without waiting for a heartbeat.
+        get_url = f"{base}/api/macros"
+        print(f"[harness] GET {get_url}")
+        status, headers, body = self.http("GET", get_url, timeout_s=15.0, read_body=True)
+        self._log_http_event(method="GET", url=get_url, status=status, headers=headers)
+        if status != 200:
+            return False
+
+        try:
+            doc = json.loads(body)
+        except Exception:
+            return False
+
+        payload: dict[str, Any] = {}
+        if isinstance(doc, dict):
+            if isinstance(doc.get("defaults"), dict):
+                payload["defaults"] = doc["defaults"]
+            if isinstance(doc.get("screens"), list):
+                payload["screens"] = doc["screens"]
+
+        if "screens" not in payload:
+            return False
+
+        post_url = f"{base}/api/macros"
+        print(f"[harness] POST {post_url} (macros apply)")
+        status, headers, _ = self.http("POST", post_url, json_body=payload, timeout_s=20.0, read_body=True)
+        self._log_http_event(method="POST", url=post_url, status=status, headers=headers)
+
+        # Portal does a best-effort icon GC after saving macros.
+        gc_url = f"{base}/api/icons/gc"
+        print(f"[harness] POST {gc_url} (icons gc, best-effort)")
+        gc_status, gc_headers, _ = self.http("POST", gc_url, timeout_s=10.0, read_body=True)
+        self._log_http_event(method="POST", url=gc_url, status=gc_status, headers=gc_headers)
+
+        return status == 200
 
     def _maybe_switch_screens(self) -> None:
         ip = self.current_ip()
@@ -1118,6 +1375,13 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--non-interactive", action="store_true", help="Do not prompt for manual actions")
     parser.add_argument("--no-health", action="store_true", help="Do not call /api/health (reduces measurement perturbation)")
     parser.add_argument("--no-pages", action="store_true", help="Do not GET portal pages during S2")
+    parser.add_argument("--browser-parallel", type=int, default=6, help="S6: parallelism for /api/* burst (default: 6)")
+    parser.add_argument(
+        "--browser-health-count",
+        type=int,
+        default=2,
+        help="S6: number of /api/health fetches to include (default: 2; ignored with --no-health)",
+    )
     parser.add_argument("--echo-serial", action="store_true", help="Echo serial logs to stdout (default: off; always captured to artifacts)")
     parser.add_argument(
         "--compare",
@@ -1162,6 +1426,8 @@ def main(argv: list[str]) -> int:
         health=not args.no_health,
         pages=not args.no_pages,
         echo_serial=bool(args.echo_serial),
+        browser_parallelism=int(args.browser_parallel),
+        browser_health_count=int(args.browser_health_count),
     )
 
     h = Harness(cfg)
