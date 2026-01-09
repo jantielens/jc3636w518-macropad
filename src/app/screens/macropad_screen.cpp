@@ -139,29 +139,18 @@ static const lv_img_dsc_t* getOrCreateMask2x(const lv_img_dsc_t* src64) {
         return cached;
     }
 
-    // Pick an empty slot, otherwise evict the least recently used.
-    size_t slot = 0;
-    bool foundEmpty = false;
-    uint32_t oldest = 0xFFFFFFFFu;
+    // Pick an empty slot. Do NOT evict/reuse a slot that might still be referenced
+    // by an LVGL image object (it would invalidate the descriptor and can crash).
+    // If the cache is full, just skip 2x generation (caller will keep the 1x mask).
+    size_t slot = (size_t)-1;
     for (size_t i = 0; i < (sizeof(s_mask2xCache) / sizeof(s_mask2xCache[0])); i++) {
         if (!s_mask2xCache[i].data128) {
             slot = i;
-            foundEmpty = true;
             break;
         }
-        if (s_mask2xCache[i].lastUseTick < oldest) {
-            oldest = s_mask2xCache[i].lastUseTick;
-            slot = i;
-        }
     }
-
-    // (We intentionally don't free evicted buffers to avoid heap fragmentation.
-    //  Cache size is tiny and bounded.)
-    if (!foundEmpty) {
-        s_mask2xCache[slot].src64 = nullptr;
-        s_mask2xCache[slot].data128 = nullptr;
-        s_mask2xCache[slot].lastUseTick = 0;
-        memset(&s_mask2xCache[slot].dsc128, 0, sizeof(s_mask2xCache[slot].dsc128));
+    if (slot == (size_t)-1) {
+        return nullptr;
     }
 
     const uint16_t srcW = src64->header.w;
