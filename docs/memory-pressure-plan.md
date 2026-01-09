@@ -175,6 +175,25 @@ The harness also writes `summary.md` with:
 - A Tripwire section (when it fired) including the tag + threshold and the worst stack margins
 - A per-tag table of all captured `[Mem]` snapshots to quickly spot which tag caused the cliff
 
+## Replay Set (portable change series)
+
+If we need to re-apply the measurement tooling + initial fixes on another branch, these commits are intended to be replayed together (in order):
+
+- `5fbb6d2` docs: add memory pressure plan and Step 3 priorities
+- `a746e64` tools: extend memory test harness (s4/s5) and ignore artifacts
+- `66e48be` telemetry: add tagged heap snapshots and tripwire across subsystems
+- `638d5e8` portal: tag macros POST and use PSRAM allocator for JSON
+
+Cherry-pick onto another branch:
+
+- `git checkout <target-branch>`
+- `git cherry-pick 5fbb6d2 a746e64 66e48be 638d5e8`
+
+Or export/apply as patches:
+
+- `git format-patch main..HEAD`
+- `git checkout <target-branch> && git am *.patch`
+
 ## Experiments Log (what we tried + results)
 
 > Fill one row per change. Always note board + scenario.
