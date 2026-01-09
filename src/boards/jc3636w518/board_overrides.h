@@ -37,9 +37,9 @@
 // ---------------------------------------------------------------------------
 // Networking / AsyncTCP
 // ---------------------------------------------------------------------------
-// Reduce AsyncTCP task stack a bit to reclaim internal RAM.
-// (The web portal defines a default, but allows per-board overrides.)
-#define CONFIG_ASYNC_TCP_STACK_SIZE 10240
+// AsyncTCP task stack (FreeRTOS task stack lives in internal RAM).
+// Watermarks in S2/S4 show ~1.4–1.6KB typical usage, so 6KB is a safe step-down.
+#define CONFIG_ASYNC_TCP_STACK_SIZE 6144
 
 // Faster heartbeat for test runs to capture [Mem] hb snapshots quickly.
 #define HEARTBEAT_INTERVAL_MS 5000UL
