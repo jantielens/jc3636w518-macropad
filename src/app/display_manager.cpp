@@ -4,6 +4,7 @@
 
 #include "display_manager.h"
 #include "log_manager.h"
+#include "device_telemetry.h"
 
 // Include selected display driver header.
 // Driver implementations are compiled via src/app/display_drivers.cpp.
@@ -272,6 +273,16 @@ void DisplayManager::lvglTask(void* pvParameter) {
         // Process pending screen switch (deferred from external calls)
         if (mgr->pendingScreen) {
             Screen* target = mgr->pendingScreen;
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+            {
+                const char* pendingId = mgr->getScreenIdForInstance(target);
+                char tag[48];
+                snprintf(tag, sizeof(tag), "lvgl_switch_pre_%s", pendingId ? pendingId : "unknown");
+                device_telemetry_log_memory_snapshot(tag);
+            }
+#endif
+
             if (mgr->currentScreen) {
                 mgr->currentScreen->hide();
             }
@@ -303,6 +314,14 @@ void DisplayManager::lvglTask(void* pvParameter) {
 
             const char* screenId = appliedId;
             Logger.logMessagef("Display", "Switched to %s", screenId ? screenId : "(unregistered)");
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+            {
+                char tag[48];
+                snprintf(tag, sizeof(tag), "lvgl_switch_post_%s", screenId ? screenId : "unknown");
+                device_telemetry_log_memory_snapshot(tag);
+            }
+#endif
         }
         
         // Handle LVGL rendering (animations, timers, etc.)

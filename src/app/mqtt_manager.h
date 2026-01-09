@@ -66,6 +66,11 @@ private:
 
     bool _discovery_published_this_boot = false;
 
+    // Instrumentation: avoid spamming snapshots in tight loops.
+    bool _logged_snapshot_connect_attempt = false;
+    bool _logged_snapshot_connected = false;
+    bool _logged_snapshot_first_publish = false;
+
     unsigned long _last_reconnect_attempt_ms = 0;
     unsigned long _last_health_publish_ms = 0;
 };

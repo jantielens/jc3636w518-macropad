@@ -1,5 +1,6 @@
 #include "device_telemetry.h"
 
+#include "board_config.h"
 #include "log_manager.h"
 
 #include <Arduino.h>
@@ -47,6 +48,9 @@ static void get_memory_snapshot(
     size_t *out_psram_min,
     size_t *out_psram_largest
 );
+
+// One-shot tripwire state (per boot).
+static bool g_low_mem_tripwire_fired = false;
 
 DeviceMemorySnapshot device_telemetry_get_memory_snapshot() {
     DeviceMemorySnapshot snapshot = {};
@@ -114,6 +118,98 @@ void device_telemetry_log_memory_snapshot(const char *tag) {
         (unsigned)psram_min,
         (unsigned)psram_largest
     );
+
+    // Tripwire: dump task stack watermarks once per boot when internal min heap is critically low.
+    // Runtime gating (not preprocessor gating) so we can't accidentally compile this out.
+    if (MEMORY_TRIPWIRE_ENABLED) {
+        // Use heap_caps min free size as it reflects internal allocator pressure across the boot.
+        if (!g_low_mem_tripwire_fired && internal_min > 0 && internal_min < (size_t)MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES) {
+            g_low_mem_tripwire_fired = true;
+            Logger.logMessagef(
+                "Mem",
+                "TRIPWIRE fired tag=%s hin=%uB < %uB (hf=%uB hl=%uB frag=%u%% pf=%uB pl=%uB)",
+                tag ? tag : "(null)",
+                (unsigned)internal_min,
+                (unsigned)MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES,
+                (unsigned)heap_free,
+                (unsigned)heap_largest,
+                (unsigned)frag_percent,
+                (unsigned)psram_free,
+                (unsigned)psram_largest
+            );
+            device_telemetry_dump_task_stack_watermarks(tag);
+        }
+    }
+}
+
+void device_telemetry_dump_task_stack_watermarks(const char *tag) {
+    // Keep this dump compact and parseable (one line per task).
+    // NOTE: This runs in the caller task context. Avoid dynamic allocation.
+    constexpr uint32_t kMaxTasks = 24;
+    TaskStatus_t task_stats[kMaxTasks];
+    uint32_t total_runtime = 0;
+
+    const int task_count = uxTaskGetSystemState(task_stats, kMaxTasks, &total_runtime);
+    if (task_count <= 0) {
+        Logger.logMessage("Mem", "Task dump: uxTaskGetSystemState returned 0");
+        return;
+    }
+
+    // Simple selection sort by remaining stack bytes ascending (worst first).
+    auto remaining_bytes_for = [](TaskHandle_t h) -> uint32_t {
+        if (!h) return 0;
+        const UBaseType_t remaining_words = uxTaskGetStackHighWaterMark(h);
+        return (uint32_t)remaining_words * (uint32_t)sizeof(StackType_t);
+    };
+
+    // Precompute remaining stack bytes to avoid repeated calls in sort.
+    uint32_t rem_bytes[kMaxTasks];
+    const int n = task_count > (int)kMaxTasks ? (int)kMaxTasks : task_count;
+    for (int i = 0; i < n; i++) {
+        rem_bytes[i] = remaining_bytes_for(task_stats[i].xHandle);
+    }
+
+    for (int i = 0; i < n; i++) {
+        int min_i = i;
+        for (int j = i + 1; j < n; j++) {
+            if (rem_bytes[j] < rem_bytes[min_i]) min_i = j;
+        }
+        if (min_i != i) {
+            TaskStatus_t tmp = task_stats[i];
+            task_stats[i] = task_stats[min_i];
+            task_stats[min_i] = tmp;
+
+            uint32_t tmpb = rem_bytes[i];
+            rem_bytes[i] = rem_bytes[min_i];
+            rem_bytes[min_i] = tmpb;
+        }
+    }
+
+    Logger.logMessagef(
+        "Mem",
+        "Task dump (%d tasks, sorted by stack margin) tag=%s",
+        n,
+        tag ? tag : "(null)"
+    );
+
+    for (int i = 0; i < n; i++) {
+        const TaskStatus_t &t = task_stats[i];
+        const uint32_t rb = rem_bytes[i];
+        const char *name = t.pcTaskName;
+        // Keep log lines short (LogManager buffers are small).
+        Logger.logMessagef(
+            "Task",
+            "name=%s prio=%u core=%d stack_rem=%uB",
+            name ? name : "(null)",
+            (unsigned)t.uxCurrentPriority,
+            (int)t.xCoreID,
+            (unsigned)rb
+        );
+    }
+
+    if (task_count > (int)kMaxTasks) {
+        Logger.logMessagef("Mem", "Task dump truncated: total=%d max=%u", task_count, (unsigned)kMaxTasks);
+    }
 }
 
 void device_telemetry_fill_api(JsonDocument &doc) {

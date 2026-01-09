@@ -46,8 +46,8 @@ MqttManager mqtt_manager;
 // WiFi retry settings
 const unsigned long WIFI_BACKOFF_BASE = 3000; // 3 seconds base (DHCP typically needs 2-3s)
 
-// Heartbeat interval
-const unsigned long HEARTBEAT_INTERVAL = 60000; // 60 seconds
+// Heartbeat interval (board-configurable)
+const unsigned long HEARTBEAT_INTERVAL = HEARTBEAT_INTERVAL_MS;
 unsigned long lastHeartbeat = 0;
 
 // WiFi watchdog for connection monitoring

@@ -37,6 +37,15 @@
 // (The web portal defines a default, but allows per-board overrides.)
 #define CONFIG_ASYNC_TCP_STACK_SIZE 10240
 
+// Faster heartbeat for test runs to capture [Mem] hb snapshots quickly.
+#define HEARTBEAT_INTERVAL_MS 5000UL
+
+// Capture memory snapshots when serving portal pages (once per boot).
+#define MEMORY_SNAPSHOT_ON_HTTP_ENABLED 1
+
+// Diagnostic: trip the one-shot stack dump closer to the portal cliff.
+#define MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES (30 * 1024)
+
 // PSRAM board: allow larger full-image uploads than the global default.
 // High-entropy JPEGs at higher quality can exceed 100KB.
 // Max JPEG bytes accepted for full image uploads.
