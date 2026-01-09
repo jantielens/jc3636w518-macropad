@@ -415,9 +415,25 @@ void handleGetInstalledIcons(AsyncWebServerRequest *request) {
 
     #if HAS_DISPLAY && HAS_ICONS
     // Build a bounded JSON response.
-    char json[4096];
-    icon_store_list_installed(json, sizeof(json));
+    // NOTE: AsyncWebServer handlers execute on the AsyncTCP task; avoid large stack allocations.
+    static constexpr size_t kInstalledIconsJsonMaxLen = 4096;
+    char* json = nullptr;
+#if SOC_SPIRAM_SUPPORTED
+    if (psramFound()) {
+        json = (char*)heap_caps_malloc(kInstalledIconsJsonMaxLen, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+#endif
+    if (!json) {
+        json = (char*)malloc(kInstalledIconsJsonMaxLen);
+    }
+    if (!json) {
+        request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
+
+    icon_store_list_installed(json, kInstalledIconsJsonMaxLen);
     request->send(200, "application/json", json);
+    free(json);
     #else
     request->send(200, "application/json", "{\"success\":true,\"source\":\"ffat\",\"icons\":[]}");
     #endif
@@ -924,7 +940,15 @@ static bool github_fetch_latest_release(char *out_version, size_t out_version_le
         return false;
     }
 
-    DynamicJsonDocument doc(8192);
+    // Prefer PSRAM for this relatively large document.
+    BasicJsonDocument<MacrosJsonAllocator> doc(8192);
+    if (doc.capacity() == 0) {
+        if (out_error && out_error_len > 0) {
+            strlcpy(out_error, "OOM (GitHub JSON doc allocation failed)", out_error_len);
+        }
+        http.end();
+        return false;
+    }
     DeserializationError err = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
     if (err) {
         if (out_error && out_error_len > 0) {
@@ -1065,7 +1089,25 @@ static void firmware_update_task(void *pv) {
     strlcpy(firmware_update_state, "writing", sizeof(firmware_update_state));
 
     WiFiClient *stream = http.getStreamPtr();
-    uint8_t buf[2048];
+    uint8_t* buf = nullptr;
+#if SOC_SPIRAM_SUPPORTED
+    if (psramFound()) {
+        buf = (uint8_t*)heap_caps_malloc(2048, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+#endif
+    if (!buf) {
+        buf = (uint8_t*)heap_caps_malloc(2048, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!buf) {
+        strlcpy(firmware_update_state, "error", sizeof(firmware_update_state));
+        strlcpy(firmware_update_error, "OOM (OTA buffer alloc failed)", sizeof(firmware_update_error));
+        Update.abort();
+        http.end();
+        firmware_update_in_progress = false;
+        ota_in_progress = false;
+        vTaskDelete(nullptr);
+        return;
+    }
 
     while (http.connected() && (http_len > 0 || http_len == -1)) {
         const size_t available = stream->available();
@@ -1074,7 +1116,7 @@ static void firmware_update_task(void *pv) {
             continue;
         }
 
-        const size_t to_read = (available > sizeof(buf)) ? sizeof(buf) : available;
+        const size_t to_read = (available > 2048) ? 2048 : available;
         const int read_bytes = stream->readBytes(buf, to_read);
         if (read_bytes <= 0) {
             break;
@@ -1086,6 +1128,7 @@ static void firmware_update_task(void *pv) {
             strlcpy(firmware_update_error, "Flash write failed", sizeof(firmware_update_error));
             Update.abort();
             http.end();
+            free(buf);
             firmware_update_in_progress = false;
             ota_in_progress = false;
             vTaskDelete(nullptr);
@@ -1099,6 +1142,7 @@ static void firmware_update_task(void *pv) {
     }
 
     http.end();
+    free(buf);
 
     if (!Update.end(true)) {
         strlcpy(firmware_update_state, "error", sizeof(firmware_update_state));
