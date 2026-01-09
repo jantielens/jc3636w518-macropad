@@ -118,6 +118,7 @@ Validate: watch tripwire “worst stacks” plus long-run stability.
 - **S1 Boot + Idle**: boot → wait for readiness marker → capture first `hb` snapshot.
   - Note: “how idle” this is depends on `MEMORY_HEARTBEAT_INTERVAL_MS` (often overridden to 5s during testing).
 - **S2 WiFi + Portal**: connect WiFi → start portal → load pages.
+- **S6 Browser-like portal flow**: load `/` + assets → parallel `/api/*` burst → save macros + config (no reboot) → load `/network.html` + assets → parallel `/api/*` burst.
 - **S3 Image API Stress**: upload max-size JPEG → decode/display → dismiss.
 - **S4 Macro Config**: upload/POST macros JSON (worst-case size) and apply.
 - **S5 MQTT**: connect + HA discovery publish + periodic health publish.
@@ -173,6 +174,7 @@ Artifacts are written to `artifacts/memory-tests/<timestamp>_<scenario>/`:
 The harness also writes `summary.md` with:
 - A derived-metrics section (mins/maxes across the run)
 - A Tripwire section (when it fired) including the tag + threshold and the worst stack margins
+- A Panic section (when detected) with the first crash marker line from `serial.log`
 - A per-tag table of all captured `[Mem]` snapshots to quickly spot which tag caused the cliff
 
 ## Replay Set (portable change series)
@@ -208,6 +210,8 @@ Or export/apply as patches:
 | 2026-01-09 | issue-14-mqtt-send-action@2fb151e | jc3636w518 | Step 3: PSRAM allocator for `/api/macros` ArduinoJson doc | S4 (macros POST/apply) | `20260109_114958_s4` | 16060 | 67 | 8179772 | fired @ `lvgl_switch_pre_macro1` (threshold 30720B, `hin` 16060B) | Major improvement: `http_macros_post_parsed` no longer collapses internal free heap (~30KB free vs ~10KB before). Remaining cliff is dominated by LVGL switch. |
 | 2026-01-09 | issue-14-mqtt-send-action@fb61e02 (dirty) | jc3636w518 | Fix MacroPadScreen 2× mask cache eviction (avoid leaks + in-use descriptor invalidation) | S4 (macros POST/apply) | `20260109_144659_s4` | 31668 | 42 | 8158544 | not fired | Compare vs `20260109_114958_s4`: Δ`hin_min` +15608B overall; `lvgl_switch_pre_macro1` Δhin +31696B; LVGL switch no longer dominates the worst-case min (floor is now steady-state `hb`). |
 | 2026-01-09 | issue-14-mqtt-send-action@9268821 (dirty) | jc3636w518 | Prefer PSRAM for LVGL draw buffer + ESP_Panel swap buffer | S4 (macros POST/apply) | `20260109_150318_s4` | 55964 | 59 | 8133844 | not fired | Confirmed in serial: LVGL draw buffer + ST77916 swapBuf both allocated in PSRAM. Compare vs `20260109_144659_s4`: Δ`hin_min` +24296B. |
+| 2026-01-09 | issue-14-mqtt-send-action@578e1b1 (dirty) | jc3636w518 | Add S6 “browser-like” multi-phase flow (home load + save + network load) | S6 | `20260109_162517_s6` | 32112 | 58 | 8126756 | not fired | Reproduced crash: `Stack canary watchpoint triggered (async_tcp)` during `/api/icons/gc` after macros apply. Root cause: large on-stack keep-set in icon GC handler. |
+| 2026-01-09 | issue-14-mqtt-send-action@578e1b1 (dirty) | jc3636w518 | Fix `/api/icons/gc` stack overflow by removing keep-set (scan macros on-demand) | S6 | `20260109_163934_s6` | 30732 | 58 | 8133196 | not fired | Crash resolved under S6. Harness now also flags panics in `summary.json`/`summary.md` (see commits `e99df8b`, `e7a5d5e`). |
 
 ### Historical notes (not directly comparable)
 
