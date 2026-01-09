@@ -73,9 +73,10 @@
 // UI rotation (LVGL).
 #define DISPLAY_ROTATION 0
 
-// Match the sample: prefer PSRAM for LVGL draw buffer (fallback handled in DisplayManager).
-// Prefer internal RAM over PSRAM for LVGL draw buffer allocation.
-#define LVGL_BUFFER_PREFER_INTERNAL true
+// Prefer PSRAM first for LVGL draw buffer (fallback handled in DisplayManager).
+#define LVGL_BUFFER_PREFER_INTERNAL false
+// Prefer PSRAM first for the ESP_Panel ST77916 swap buffer (fallbacks exist).
+#define ESP_PANEL_SWAPBUF_PREFER_INTERNAL false
 // LVGL draw buffer size in pixels.
 #define LVGL_BUFFER_SIZE (DISPLAY_WIDTH * 16)  // 16 rows (matches sample default)
 

@@ -209,6 +209,13 @@
 #define LVGL_BUFFER_PREFER_INTERNAL false
 #endif
 
+// ESP_Panel (ST77916 QSPI): prefer allocating the optional byte-swap buffer in
+// internal RAM first for maximum flush reliability. Boards can override to try
+// PSRAM first.
+#ifndef ESP_PANEL_SWAPBUF_PREFER_INTERNAL
+#define ESP_PANEL_SWAPBUF_PREFER_INTERNAL true
+#endif
+
 // ============================================================================
 // Memory Diagnostics (instrumentation)
 // ============================================================================
