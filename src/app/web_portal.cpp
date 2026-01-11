@@ -27,6 +27,7 @@
 #if HAS_DISPLAY && HAS_ICONS
 #include "icon_registry.h"
 #include "icon_store.h"
+#include <FFat.h>
 #endif
 
 #if HAS_DISPLAY
@@ -174,6 +175,66 @@ static void icon_body_reset() {
     if (toFree) free(toFree);
 }
 
+// ===== Chunked response helpers =====
+static size_t chunk_copy_out(uint8_t* dst, size_t maxLen, const char* src, size_t srcLen, size_t& srcOff) {
+    if (!src || srcOff >= srcLen || maxLen == 0) return 0;
+    const size_t n = (srcLen - srcOff) < maxLen ? (srcLen - srcOff) : maxLen;
+    memcpy(dst, src + srcOff, n);
+    srcOff += n;
+    return n;
+}
+
+template <typename State>
+static void send_chunked_state(AsyncWebServerRequest* request, const char* contentType, State* st) {
+    AsyncWebServerResponse* response = request->beginChunkedResponse(
+        contentType,
+        [st](uint8_t* buffer, size_t maxLen, size_t /*index*/) mutable -> size_t {
+            if (!st) return 0;
+            const size_t n = st->fill(buffer, maxLen);
+            if (n == 0) {
+                delete st;
+                st = nullptr;
+            }
+            return n;
+        }
+    );
+    request->send(response);
+}
+
+struct JsonStringChunker {
+    String payload;
+    size_t off = 0;
+
+    size_t fill(uint8_t* buffer, size_t maxLen) {
+        if (maxLen == 0) return 0;
+        const size_t len = payload.length();
+        if (off >= len) return 0;
+        const size_t n = (len - off) < maxLen ? (len - off) : maxLen;
+        memcpy(buffer, payload.c_str() + off, n);
+        off += n;
+        return n;
+    }
+};
+
+template <typename JsonDoc>
+static bool send_json_doc_chunked(AsyncWebServerRequest* request, JsonDoc& doc, int oom_http_status) {
+    JsonStringChunker* st = new JsonStringChunker();
+    if (!st) {
+        request->send(oom_http_status, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return false;
+    }
+
+    const size_t requiredCapacity = measureJson(doc) + 1;
+    if (!st->payload.reserve(requiredCapacity)) {
+        delete st;
+        request->send(oom_http_status, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return false;
+    }
+    serializeJson(doc, st->payload);
+    send_chunked_state(request, "application/json", st);
+    return true;
+}
+
 // The runtime macro screen UI reads from this instance (defined in app.ino).
 extern MacroConfig macro_config;
 
@@ -286,99 +347,219 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
     macros_cache_load_if_needed();
 
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
-    response->print("{\"success\":true,\"version\":9,\"buttons_per_screen\":");
-    response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
+    // Stream the response in chunks to avoid building the full JSON in RAM.
+    // This reduces transient allocations and keeps TTFB low.
+    struct MacrosChunker {
+        // Output cursors
+        const char* cur = nullptr;
+        size_t cur_len = 0;
+        size_t cur_off = 0;
 
-    // Global defaults (always present)
-    response->print(",\"defaults\":{");
-    response->print("\"screen_bg\":");
-    response->print((unsigned)macro_config.default_screen_bg);
-    response->print(",\"button_bg\":");
-    response->print((unsigned)macro_config.default_button_bg);
-    response->print(",\"icon_color\":");
-    response->print((unsigned)macro_config.default_icon_color);
-    response->print(",\"label_color\":");
-    response->print((unsigned)macro_config.default_label_color);
-    response->print("}");
+        // Iteration
+        int tpl_i = 0;
+        bool tpl_first = true;
+        int screen_i = 0;
+        int btn_i = 0;
 
-    // Templates (for the web editor)
-    response->print(",\"templates\":[");
-    {
-        static const char* kTemplateIds[] = {
-            macro_templates::kTemplateRoundRing9,
-            macro_templates::kTemplateRoundPie8,
-            macro_templates::kTemplateStackSides5,
-            macro_templates::kTemplateWideSides3,
-            macro_templates::kTemplateSplitSides4,
-        };
-        bool first = true;
-        for (const char* id : kTemplateIds) {
-            if (!id || !*id) continue;
-            const char* layout = macro_templates::selector_layout_json(id);
-            if (!layout) continue;
-            if (!first) response->print(",");
-            first = false;
-            response->print("{\"id\":\"");
-            response->print(id);
-            response->print("\",\"name\":\"");
-            response->print(macro_templates::display_name(id));
-            response->print("\",\"selector_layout\":");
-            response->print(layout);
-            response->print("}");
+        enum class Phase : uint8_t {
+            Header,
+            Templates,
+            AfterTemplates,
+            ScreenStart,
+            Buttons,
+            ScreenEnd,
+            AfterScreens,
+            Done,
+        } phase = Phase::Header;
+
+        String scratch;
+        String item_json;
+
+        MacrosChunker() {
+            scratch.reserve(2048);
+            item_json.reserve(1024);
         }
+
+        void set_piece(const char* p, size_t n) {
+            cur = p;
+            cur_len = n;
+            cur_off = 0;
+        }
+
+        bool next_piece() {
+            static const char* kTemplateIds[] = {
+                macro_templates::kTemplateRoundRing9,
+                macro_templates::kTemplateRoundPie8,
+                macro_templates::kTemplateStackSides5,
+                macro_templates::kTemplateWideSides3,
+                macro_templates::kTemplateSplitSides4,
+            };
+
+            scratch.remove(0);
+            item_json.remove(0);
+
+            switch (phase) {
+                case Phase::Header: {
+                    // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
+                    char hdr[256];
+                    snprintf(
+                        hdr,
+                        sizeof(hdr),
+                        "{\"success\":true,\"version\":9,\"buttons_per_screen\":%u,\"defaults\":{\"screen_bg\":%u,\"button_bg\":%u,\"icon_color\":%u,\"label_color\":%u},\"templates\":[",
+                        (unsigned)MACROS_BUTTONS_PER_SCREEN,
+                        (unsigned)macro_config.default_screen_bg,
+                        (unsigned)macro_config.default_button_bg,
+                        (unsigned)macro_config.default_icon_color,
+                        (unsigned)macro_config.default_label_color);
+                    scratch += hdr;
+                    set_piece(scratch.c_str(), scratch.length());
+                    phase = Phase::Templates;
+                    return true;
+                }
+
+                case Phase::Templates: {
+                    while (tpl_i < (int)(sizeof(kTemplateIds) / sizeof(kTemplateIds[0]))) {
+                        const char* id = kTemplateIds[tpl_i++];
+                        if (!id || !*id) continue;
+                        const char* layout = macro_templates::selector_layout_json(id);
+                        if (!layout) continue;
+
+                        if (!tpl_first) scratch += ",";
+                        tpl_first = false;
+                        scratch += "{\"id\":\"";
+                        scratch += id;
+                        scratch += "\",\"name\":\"";
+                        scratch += macro_templates::display_name(id);
+                        scratch += "\",\"selector_layout\":";
+                        scratch += layout;
+                        scratch += "}";
+
+                        set_piece(scratch.c_str(), scratch.length());
+                        return true;
+                    }
+                    phase = Phase::AfterTemplates;
+                    return next_piece();
+                }
+
+                case Phase::AfterTemplates: {
+                    set_piece("],\"screens\":[", strlen("],\"screens\":["));
+                    phase = Phase::ScreenStart;
+                    screen_i = 0;
+                    btn_i = 0;
+                    return true;
+                }
+
+                case Phase::ScreenStart: {
+                    if (screen_i >= MACROS_SCREEN_COUNT) {
+                        phase = Phase::AfterScreens;
+                        return next_piece();
+                    }
+
+                    if (screen_i > 0) scratch += ",";
+                    const char* tpl = macro_config.template_id[screen_i];
+                    if (!macro_templates::is_valid(tpl)) {
+                        tpl = macro_templates::default_id();
+                    }
+
+                    scratch += "{\"template\":\"";
+                    scratch += tpl;
+                    scratch += "\"";
+
+                    if (macro_config.screen_bg[screen_i] != MACROS_COLOR_UNSET) {
+                        scratch += ",\"screen_bg\":";
+                        scratch += (unsigned)macro_config.screen_bg[screen_i];
+                    }
+
+                    scratch += ",\"buttons\":[";
+                    set_piece(scratch.c_str(), scratch.length());
+                    phase = Phase::Buttons;
+                    btn_i = 0;
+                    return true;
+                }
+
+                case Phase::Buttons: {
+                    if (btn_i >= MACROS_BUTTONS_PER_SCREEN) {
+                        phase = Phase::ScreenEnd;
+                        return next_piece();
+                    }
+
+                    const MacroButtonConfig* btn = &macro_config.buttons[screen_i][btn_i];
+
+                    // Use ArduinoJson to correctly escape strings.
+                    StaticJsonDocument<768> item;
+                    item["label"] = btn->label;
+                    item["action"] = macro_action_to_string(btn->action);
+                    item["payload"] = btn->payload;
+                    item["mqtt_topic"] = btn->mqtt_topic;
+
+                    JsonObject icon = item.createNestedObject("icon");
+                    icon["type"] = macro_icon_type_to_string(btn->icon.type);
+                    icon["id"] = btn->icon.id;
+                    icon["display"] = btn->icon.display;
+
+                    if (btn->button_bg != MACROS_COLOR_UNSET) item["button_bg"] = btn->button_bg;
+                    if (btn->icon_color != MACROS_COLOR_UNSET) item["icon_color"] = btn->icon_color;
+                    if (btn->label_color != MACROS_COLOR_UNSET) item["label_color"] = btn->label_color;
+
+                    // serializeJson(doc, String&) overwrites the destination, so build the
+                    // delimiter + object into scratch and stream that.
+                    if (btn_i > 0) scratch += ",";
+                    serializeJson(item, item_json);
+                    scratch += item_json;
+                    btn_i++;
+
+                    set_piece(scratch.c_str(), scratch.length());
+                    return true;
+                }
+
+                case Phase::ScreenEnd: {
+                    set_piece("]}", strlen("]}"));
+                    phase = Phase::ScreenStart;
+                    screen_i++;
+                    return true;
+                }
+
+                case Phase::AfterScreens: {
+                    set_piece("]}", strlen("]}"));
+                    phase = Phase::Done;
+                    return true;
+                }
+
+                case Phase::Done:
+                default:
+                    return false;
+            }
+        }
+
+        size_t fill(uint8_t* buffer, size_t maxLen) {
+            size_t wrote = 0;
+            while (wrote < maxLen) {
+                if (!cur || cur_off >= cur_len) {
+                    if (!next_piece()) {
+                        break;
+                    }
+                }
+                const size_t n = chunk_copy_out(buffer + wrote, maxLen - wrote, cur, cur_len, cur_off);
+                if (n == 0) {
+                    // Safety: avoid infinite loops if something goes wrong.
+                    cur = nullptr;
+                    cur_len = 0;
+                    cur_off = 0;
+                    continue;
+                }
+                wrote += n;
+            }
+            return wrote;
+        }
+    };
+
+    MacrosChunker* st = new MacrosChunker();
+    if (!st) {
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
     }
-    response->print("]");
 
-    response->print(",\"screens\":[");
-
-    for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
-        if (s > 0) response->print(",");
-        const char* tpl = macro_config.template_id[s];
-        if (!macro_templates::is_valid(tpl)) {
-            tpl = macro_templates::default_id();
-        }
-
-        response->print("{\"template\":\"");
-        response->print(tpl);
-        response->print("\"");
-
-        // Optional per-screen override
-        if (macro_config.screen_bg[s] != MACROS_COLOR_UNSET) {
-            response->print(",\"screen_bg\":");
-            response->print((unsigned)macro_config.screen_bg[s]);
-        }
-
-        response->print(",\"buttons\":[");
-
-        for (int b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
-            const MacroButtonConfig *btn = &macro_config.buttons[s][b];
-            if (b > 0) response->print(",");
-
-            // Use ArduinoJson to correctly escape strings, but keep the document tiny.
-            StaticJsonDocument<768> item;
-            item["label"] = btn->label;
-            item["action"] = macro_action_to_string(btn->action);
-            item["payload"] = btn->payload;
-            item["mqtt_topic"] = btn->mqtt_topic;
-
-            JsonObject icon = item.createNestedObject("icon");
-            icon["type"] = macro_icon_type_to_string(btn->icon.type);
-            icon["id"] = btn->icon.id;
-            icon["display"] = btn->icon.display;
-
-            if (btn->button_bg != MACROS_COLOR_UNSET) item["button_bg"] = btn->button_bg;
-            if (btn->icon_color != MACROS_COLOR_UNSET) item["icon_color"] = btn->icon_color;
-            if (btn->label_color != MACROS_COLOR_UNSET) item["label_color"] = btn->label_color;
-            serializeJson(item, *response);
-        }
-
-        response->print("]}");
-    }
-
-    response->print("]}");
-    request->send(response);
+    send_chunked_state(request, "application/json", st);
 }
 
 // GET /api/icons
@@ -386,28 +567,98 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 void handleGetIcons(AsyncWebServerRequest *request) {
     if (!portal_auth_gate(request)) return;
 
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    response->print("{\"icons\":[");
+    // Stream response to keep AsyncTCP task snappy.
+    struct IconsChunker {
+        const char* cur = nullptr;
+        size_t cur_len = 0;
+        size_t cur_off = 0;
 
-    #if HAS_DISPLAY && HAS_ICONS
-    const size_t n = icon_registry_count();
-    for (size_t i = 0; i < n; i++) {
-        if (i > 0) response->print(",");
+        enum class Phase : uint8_t { Header, Items, Done } phase = Phase::Header;
 
-        const char* id = icon_registry_id_at(i);
-        const IconKind kind = icon_registry_kind_at(i);
+        size_t i = 0;
+        bool first = true;
 
-        // icon_id is expected to be a safe identifier ([a-z0-9_]+), so we don't do JSON escaping here.
-        response->print("{\"id\":\"");
-        response->print(id ? id : "");
-        response->print("\",\"kind\":\"");
-        response->print(kind == IconKind::Color ? "color" : "mask");
-        response->print("\"}");
+        String scratch;
+
+        IconsChunker() { scratch.reserve(256); }
+
+        void set_piece(const char* p, size_t n) {
+            cur = p;
+            cur_len = n;
+            cur_off = 0;
+        }
+
+        bool next_piece() {
+            scratch.remove(0);
+
+            switch (phase) {
+                case Phase::Header:
+                    set_piece("{\"icons\":[", strlen("{\"icons\":["));
+                    phase = Phase::Items;
+                    return true;
+
+                case Phase::Items: {
+#if HAS_DISPLAY && HAS_ICONS
+                    const size_t n = icon_registry_count();
+                    while (i < n) {
+                        const char* id = icon_registry_id_at(i);
+                        const IconKind kind = icon_registry_kind_at(i);
+                        i++;
+
+                        if (!id || !*id) continue;
+
+                        if (!first) scratch += ",";
+                        first = false;
+
+                        // icon_id is expected to be a safe identifier ([a-z0-9_]+), so we don't do JSON escaping here.
+                        scratch += "{\"id\":\"";
+                        scratch += id;
+                        scratch += "\",\"kind\":\"";
+                        scratch += (kind == IconKind::Color ? "color" : "mask");
+                        scratch += "\"}";
+
+                        set_piece(scratch.c_str(), scratch.length());
+                        return true;
+                    }
+#endif
+
+                    set_piece("]}", strlen("]}"));
+                    phase = Phase::Done;
+                    return true;
+                }
+
+                case Phase::Done:
+                default:
+                    return false;
+            }
+        }
+
+        size_t fill(uint8_t* buffer, size_t maxLen) {
+            size_t wrote = 0;
+            while (wrote < maxLen) {
+                if (!cur || cur_off >= cur_len) {
+                    if (!next_piece()) break;
+                }
+                const size_t n = chunk_copy_out(buffer + wrote, maxLen - wrote, cur, cur_len, cur_off);
+                if (n == 0) {
+                    cur = nullptr;
+                    cur_len = 0;
+                    cur_off = 0;
+                    break;
+                }
+                wrote += n;
+            }
+            return wrote;
+        }
+    };
+
+    IconsChunker* st = new IconsChunker();
+    if (!st) {
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
     }
-    #endif
 
-    response->print("]}");
-    request->send(response);
+    send_chunked_state(request, "application/json", st);
 }
 
 // GET /api/icons/installed
@@ -416,26 +667,129 @@ void handleGetInstalledIcons(AsyncWebServerRequest *request) {
     if (!portal_auth_gate(request)) return;
 
     #if HAS_DISPLAY && HAS_ICONS
-    // Build a bounded JSON response.
-    // NOTE: AsyncWebServer handlers execute on the AsyncTCP task; avoid large stack allocations.
-    static constexpr size_t kInstalledIconsJsonMaxLen = 4096;
-    char* json = nullptr;
-#if SOC_SPIRAM_SUPPORTED
-    if (psramFound()) {
-        json = (char*)heap_caps_malloc(kInstalledIconsJsonMaxLen, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-#endif
-    if (!json) {
-        json = (char*)malloc(kInstalledIconsJsonMaxLen);
-    }
-    if (!json) {
+    // Stream installed icons directly from FFat to avoid fixed-size buffers.
+    struct InstalledIconsChunker {
+        const char* cur = nullptr;
+        size_t cur_len = 0;
+        size_t cur_off = 0;
+
+        enum class Phase : uint8_t { Header, Items, Footer, Done } phase = Phase::Header;
+
+        bool first = true;
+        bool ffat_ok = false;
+        File dir;
+        File f;
+
+        String scratch;
+
+        InstalledIconsChunker() {
+            scratch.reserve(256);
+
+            ffat_ok = icon_store_ffat_ready() && FFat.exists("/icons");
+            if (ffat_ok) {
+                dir = FFat.open("/icons");
+                if (!dir || !dir.isDirectory()) {
+                    ffat_ok = false;
+                } else {
+                    f = dir.openNextFile();
+                }
+            }
+        }
+
+        void set_piece(const char* p, size_t n) {
+            cur = p;
+            cur_len = n;
+            cur_off = 0;
+        }
+
+        bool next_piece() {
+            scratch.remove(0);
+
+            switch (phase) {
+                case Phase::Header:
+                    set_piece("{\"success\":true,\"source\":\"ffat\",\"icons\":[", strlen("{\"success\":true,\"source\":\"ffat\",\"icons\":["));
+                    phase = Phase::Items;
+                    return true;
+
+                case Phase::Items: {
+                    if (!ffat_ok) {
+                        phase = Phase::Footer;
+                        return next_piece();
+                    }
+
+                    while (f) {
+                        if (!f.isDirectory()) {
+                            const char* name = f.name();
+                            if (name) {
+                                const char* base = strrchr(name, '/');
+                                base = base ? (base + 1) : name;
+                                const char* ext = strrchr(base, '.');
+                                const size_t base_len = ext ? (size_t)(ext - base) : strlen(base);
+
+                                if (ext && strcmp(ext, ".bin") == 0 && base_len > 0 && base_len < 64) {
+                                    char tmp[64];
+                                    memset(tmp, 0, sizeof(tmp));
+                                    memcpy(tmp, base, base_len);
+                                    tmp[base_len] = '\0';
+
+                                    if (!first) scratch += ",";
+                                    first = false;
+
+                                    // `tmp` is derived from filename and restricted to [a-z0-9_]+, so no escaping needed.
+                                    scratch += "{\"id\":\"";
+                                    scratch += tmp;
+                                    scratch += "\",\"kind\":\"color\"}";
+
+                                    f = dir.openNextFile();
+                                    set_piece(scratch.c_str(), scratch.length());
+                                    return true;
+                                }
+                            }
+                        }
+                        f = dir.openNextFile();
+                    }
+
+                    phase = Phase::Footer;
+                    return next_piece();
+                }
+
+                case Phase::Footer:
+                    set_piece("]}", strlen("]}"));
+                    phase = Phase::Done;
+                    return true;
+
+                case Phase::Done:
+                default:
+                    return false;
+            }
+        }
+
+        size_t fill(uint8_t* buffer, size_t maxLen) {
+            size_t wrote = 0;
+            while (wrote < maxLen) {
+                if (!cur || cur_off >= cur_len) {
+                    if (!next_piece()) break;
+                }
+                const size_t n = chunk_copy_out(buffer + wrote, maxLen - wrote, cur, cur_len, cur_off);
+                if (n == 0) {
+                    cur = nullptr;
+                    cur_len = 0;
+                    cur_off = 0;
+                    break;
+                }
+                wrote += n;
+            }
+            return wrote;
+        }
+    };
+
+    InstalledIconsChunker* st = new InstalledIconsChunker();
+    if (!st) {
         request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
         return;
     }
 
-    icon_store_list_installed(json, kInstalledIconsJsonMaxLen);
-    request->send(200, "application/json", json);
-    free(json);
+    send_chunked_state(request, "application/json", st);
     #else
     request->send(200, "application/json", "{\"success\":true,\"source\":\"ffat\",\"icons\":[]}");
     #endif
@@ -1787,68 +2141,57 @@ void handleDeleteConfig(AsyncWebServerRequest *request) {
 // GET /api/info - Get device information
 void handleGetVersion(AsyncWebServerRequest *request) {
     if (!portal_auth_gate(request)) return;
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    response->print("{\"version\":\"");
-    response->print(FIRMWARE_VERSION);
-    response->print("\",\"build_date\":\"");
-    response->print(BUILD_DATE);
-    response->print("\",\"build_time\":\"");
-    response->print(BUILD_TIME);
-    response->print("\",\"chip_model\":\"");
-    response->print(ESP.getChipModel());
-    response->print("\",\"chip_revision\":");
-    response->print(ESP.getChipRevision());
-    response->print(",\"chip_cores\":");
-    response->print(ESP.getChipCores());
-    response->print(",\"cpu_freq\":");
-    response->print(ESP.getCpuFreqMHz());
-    response->print(",\"flash_chip_size\":");
-    response->print(ESP.getFlashChipSize());
-    response->print(",\"psram_size\":");
-    response->print(ESP.getPsramSize());
-    response->print(",\"free_heap\":");
-    response->print(ESP.getFreeHeap());
-    response->print(",\"sketch_size\":");
-    response->print(device_telemetry_sketch_size());
-    response->print(",\"free_sketch_space\":");
-    response->print(device_telemetry_free_sketch_space());
-    response->print(",\"mac_address\":\"");
-    response->print(WiFi.macAddress());
-    response->print("\",\"wifi_hostname\":\"");
-    response->print(WiFi.getHostname());
-    response->print("\",\"mdns_name\":\"");
-    response->print(WiFi.getHostname());
-    response->print(".local\",\"hostname\":\"");
-    response->print(WiFi.getHostname());
-    response->print("\",\"project_name\":\"");
-    response->print(PROJECT_NAME);
-    response->print("\",\"project_display_name\":\"");
-    response->print(PROJECT_DISPLAY_NAME);
+
+    // Build JSON via ArduinoJson (safe escaping), then stream it using chunked response.
+    // NOTE: AsyncWebServer handlers execute on the AsyncTCP task; avoid large stack allocations.
+    static constexpr size_t kInfoJsonDocCapacity = 4096;
+    BasicJsonDocument<MacrosJsonAllocator> doc(kInfoJsonDocCapacity);
+    if (doc.capacity() == 0) {
+        request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
+
+    doc["version"] = FIRMWARE_VERSION;
+    doc["build_date"] = BUILD_DATE;
+    doc["build_time"] = BUILD_TIME;
+    doc["chip_model"] = ESP.getChipModel();
+    doc["chip_revision"] = ESP.getChipRevision();
+    doc["chip_cores"] = ESP.getChipCores();
+    doc["cpu_freq"] = ESP.getCpuFreqMHz();
+    doc["flash_chip_size"] = ESP.getFlashChipSize();
+    doc["psram_size"] = ESP.getPsramSize();
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["sketch_size"] = device_telemetry_sketch_size();
+    doc["free_sketch_space"] = device_telemetry_free_sketch_space();
+    doc["mac_address"] = WiFi.macAddress();
+    doc["wifi_hostname"] = WiFi.getHostname();
+
+    String mdns;
+    mdns.reserve(64);
+    mdns += WiFi.getHostname();
+    mdns += ".local";
+    doc["mdns_name"] = mdns;
+    doc["hostname"] = WiFi.getHostname();
+    doc["project_name"] = PROJECT_NAME;
+    doc["project_display_name"] = PROJECT_DISPLAY_NAME;
 
     // Build metadata for GitHub-based updates
-    response->print("\",\"board_name\":\"");
     #ifdef BUILD_BOARD_NAME
-    response->print(BUILD_BOARD_NAME);
+    doc["board_name"] = BUILD_BOARD_NAME;
     #else
-    response->print("unknown");
+    doc["board_name"] = "unknown";
     #endif
-    response->print("\",\"github_updates_enabled\":");
-    response->print(GITHUB_UPDATES_ENABLED ? "true" : "false");
+    doc["github_updates_enabled"] = (GITHUB_UPDATES_ENABLED ? true : false);
     #if GITHUB_UPDATES_ENABLED
-    response->print(",\"github_owner\":\"");
-    response->print(GITHUB_OWNER);
-    response->print("\",\"github_repo\":\"");
-    response->print(GITHUB_REPO);
-    response->print("\"");
+    doc["github_owner"] = GITHUB_OWNER;
+    doc["github_repo"] = GITHUB_REPO;
     #endif
-    response->print(",\"has_mqtt\":");
-    response->print(HAS_MQTT ? "true" : "false");
-    response->print(",\"has_backlight\":");
-    response->print(HAS_BACKLIGHT ? "true" : "false");
-    
+
+    doc["has_mqtt"] = (HAS_MQTT ? true : false);
+    doc["has_backlight"] = (HAS_BACKLIGHT ? true : false);
+
     #if HAS_DISPLAY
-    // Display screen information
-    response->print(",\"has_display\":true");
+    doc["has_display"] = true;
 
     // Display resolution (driver coordinate space for direct writes / image upload)
     int display_coord_width = DISPLAY_WIDTH;
@@ -1857,48 +2200,47 @@ void handleGetVersion(AsyncWebServerRequest *request) {
         display_coord_width = displayManager->getDriver()->width();
         display_coord_height = displayManager->getDriver()->height();
     }
-    response->print(",\"display_coord_width\":");
-    response->print(display_coord_width);
-    response->print(",\"display_coord_height\":");
-    response->print(display_coord_height);
-    
+    doc["display_coord_width"] = display_coord_width;
+    doc["display_coord_height"] = display_coord_height;
+
     // Get available screens
     size_t screen_count = 0;
     const ScreenInfo* screens = display_manager_get_available_screens(&screen_count);
-    
-    response->print(",\"available_screens\":[");
+    JsonArray arr = doc.createNestedArray("available_screens");
     for (size_t i = 0; i < screen_count; i++) {
-        if (i > 0) response->print(",");
-        response->print("{\"id\":\"");
-        response->print(screens[i].id);
-        response->print("\",\"name\":\"");
-        response->print(screens[i].display_name);
-        response->print("\"}");
+        JsonObject o = arr.createNestedObject();
+        o["id"] = screens[i].id;
+        o["name"] = screens[i].display_name;
     }
-    response->print("]");
-    
+
     // Get current screen
     const char* current_screen = display_manager_get_current_screen_id();
-    response->print(",\"current_screen\":");
     if (current_screen) {
-        response->print("\"");
-        response->print(current_screen);
-        response->print("\"");
+        doc["current_screen"] = current_screen;
     } else {
-        response->print("null");
+        doc["current_screen"] = nullptr;
     }
     #else
-    response->print(",\"has_display\":false");
+    doc["has_display"] = false;
     #endif
-    
-    response->print("}");
-    request->send(response);
+
+    if (doc.overflowed()) {
+        Logger.logMessage("Portal", "ERROR: /api/info JSON overflow (document too small)");
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Response too large\"}");
+        return;
+    }
+
+    send_json_doc_chunked(request, doc, 503);
 }
 
 // GET /api/health - Get device health statistics
 void handleGetHealth(AsyncWebServerRequest *request) {
     if (!portal_auth_gate(request)) return;
-    StaticJsonDocument<1024> doc;
+    BasicJsonDocument<MacrosJsonAllocator> doc(1024);
+    if (doc.capacity() == 0) {
+        request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
 
     device_telemetry_fill_api(doc);
 
@@ -1908,9 +2250,7 @@ void handleGetHealth(AsyncWebServerRequest *request) {
         return;
     }
 
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    serializeJson(doc, *response);
-    request->send(response);
+    send_json_doc_chunked(request, doc, 503);
 }
 
 // POST /api/reboot - Reboot device without saving

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-01-11
+
+### Added
+- Add simple HTTP benchmark tooling for measuring API latency.
+
+### Changed
+- Stream large JSON API responses using chunked responses to reduce TTFB and AsyncTCP task load (`/api/macros`, `/api/icons`, `/api/icons/installed`, `/api/info`, `/api/health`).
+
+### Fixed
+- Fix `/api/icons` response never terminating under chunked streaming.
+- Remove fixed-size response limit from `/api/icons/installed` by streaming FFat directory entries.
+
 ## [1.4.0] - 2026-01-11
 
 ### Added
