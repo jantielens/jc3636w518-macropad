@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-01-11
+
+### Added
+- Macro button action: MQTT publish.
+- ErrorScreen with an API to show errors.
+- Memory pressure tooling: tagged heap snapshots + tripwire + reproducible harness scenarios (S4/S5/S6) with panic detection.
+
+### Changed
+- Prefer PSRAM for a number of large/transient allocations (web portal JSON/docs/buffers, LVGL draw buffer + display swap buffer, NimBLE host allocations).
+- Right-size AsyncTCP stack usage (board override on `jc3636w518`) and lower the default fallback stack size for other boards.
+
+### Fixed
+- Fix AsyncTCP stack overflow in `/api/icons/gc` under browser-like portal load.
+- Fix unsafe LVGL mask cache eviction behavior.
+
 ## [1.3.0] - 2026-01-08
 
 ### Added
