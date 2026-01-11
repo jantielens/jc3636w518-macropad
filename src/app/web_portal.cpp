@@ -5,10 +5,12 @@
  * Serves static files and provides REST API for configuration.
  */
 
-// Increase AsyncTCP task stack size to prevent overflow
-// Default is 8192, increase to 16384 for web assets
+// AsyncTCP task stack size (FreeRTOS task stack lives in internal RAM).
+// Boards may override this in their board_overrides.h.
+// Historical runs show CONFIG_ASYNC_TCP_STACK_SIZE(raw)=10240 for this project;
+// keep a conservative default here for boards without overrides.
 #ifndef CONFIG_ASYNC_TCP_STACK_SIZE
-#define CONFIG_ASYNC_TCP_STACK_SIZE 16384
+#define CONFIG_ASYNC_TCP_STACK_SIZE 10240
 #endif
 
 #include "web_portal.h"
