@@ -41,14 +41,9 @@
 // Watermarks in S2/S4 show ~1.4–1.6KB typical usage, so 6KB is a safe step-down.
 #define CONFIG_ASYNC_TCP_STACK_SIZE 6144
 
-// Faster heartbeat for test runs to capture [Mem] hb snapshots quickly.
-#define HEARTBEAT_INTERVAL_MS 5000UL
-
-// Capture memory snapshots when serving portal pages (once per boot).
-#define MEMORY_SNAPSHOT_ON_HTTP_ENABLED 1
-
-// Diagnostic: trip the one-shot stack dump closer to the portal cliff.
-#define MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES (30 * 1024)
+// Memory diagnostics defaults are intentionally kept quiet for normal use.
+// For automated memory tests, temporarily override these (e.g. HEARTBEAT_INTERVAL_MS=5000,
+// MEMORY_SNAPSHOT_ON_HTTP_ENABLED=1, MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES=30*1024).
 
 // PSRAM board: allow larger full-image uploads than the global default.
 // High-entropy JPEGs at higher quality can exceed 100KB.

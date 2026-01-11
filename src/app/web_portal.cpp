@@ -2186,8 +2186,6 @@ void web_portal_init(DeviceConfig *config) {
     Logger.logBegin("Portal Init");
     
     current_config = config;
-    Logger.logLinef("Portal config pointer: %p, backlight_brightness: %d", 
-                    current_config, current_config->backlight_brightness);
 
     // Load macros config once at portal init so GET /api/macros is cheap.
     macros_cache_load_if_needed();
@@ -2367,9 +2365,7 @@ void web_portal_init(DeviceConfig *config) {
     image_cfg.max_timeout_ms = IMAGE_API_MAX_TIMEOUT_MS;
     
     // Initialize and register routes
-    Logger.logMessage("Portal", "Calling image_api_init...");
     image_api_init(image_cfg, backend);
-    Logger.logMessage("Portal", "Calling image_api_register_routes...");
     image_api_register_routes(server, portal_auth_gate);
     Logger.logMessage("Portal", "Image API initialized");
     #endif // HAS_IMAGE_API && HAS_DISPLAY
