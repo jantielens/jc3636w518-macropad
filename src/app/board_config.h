@@ -210,8 +210,8 @@
 #endif
 
 // ESP_Panel (ST77916 QSPI): prefer allocating the optional byte-swap buffer in
-// internal RAM first for maximum flush reliability. Boards can override to try
-// PSRAM first.
+// internal RAM first for maximum flush reliability.
+// Prefer internal RAM over PSRAM for ESP_Panel swap buffer allocation.
 #ifndef ESP_PANEL_SWAPBUF_PREFER_INTERNAL
 #define ESP_PANEL_SWAPBUF_PREFER_INTERNAL true
 #endif
