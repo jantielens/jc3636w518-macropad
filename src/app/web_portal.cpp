@@ -286,98 +286,239 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
     macros_cache_load_if_needed();
 
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
-    response->print("{\"success\":true,\"version\":9,\"buttons_per_screen\":");
-    response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
+    // Stream the response in chunks to avoid building the full JSON in RAM.
+    // This reduces transient allocations and keeps TTFB low.
+    struct MacrosChunker {
+        // Output cursors
+        const char* cur = nullptr;
+        size_t cur_len = 0;
+        size_t cur_off = 0;
 
-    // Global defaults (always present)
-    response->print(",\"defaults\":{");
-    response->print("\"screen_bg\":");
-    response->print((unsigned)macro_config.default_screen_bg);
-    response->print(",\"button_bg\":");
-    response->print((unsigned)macro_config.default_button_bg);
-    response->print(",\"icon_color\":");
-    response->print((unsigned)macro_config.default_icon_color);
-    response->print(",\"label_color\":");
-    response->print((unsigned)macro_config.default_label_color);
-    response->print("}");
+        // Iteration
+        int tpl_i = 0;
+        bool tpl_first = true;
+        int screen_i = 0;
+        int btn_i = 0;
 
-    // Templates (for the web editor)
-    response->print(",\"templates\":[");
-    {
-        static const char* kTemplateIds[] = {
-            macro_templates::kTemplateRoundRing9,
-            macro_templates::kTemplateRoundPie8,
-            macro_templates::kTemplateStackSides5,
-            macro_templates::kTemplateWideSides3,
-            macro_templates::kTemplateSplitSides4,
-        };
-        bool first = true;
-        for (const char* id : kTemplateIds) {
-            if (!id || !*id) continue;
-            const char* layout = macro_templates::selector_layout_json(id);
-            if (!layout) continue;
-            if (!first) response->print(",");
-            first = false;
-            response->print("{\"id\":\"");
-            response->print(id);
-            response->print("\",\"name\":\"");
-            response->print(macro_templates::display_name(id));
-            response->print("\",\"selector_layout\":");
-            response->print(layout);
-            response->print("}");
+        enum class Phase : uint8_t {
+            Header,
+            Templates,
+            AfterTemplates,
+            ScreenStart,
+            Buttons,
+            ScreenEnd,
+            AfterScreens,
+            Done,
+        } phase = Phase::Header;
+
+        String scratch;
+        String item_json;
+
+        MacrosChunker() {
+            scratch.reserve(2048);
+            item_json.reserve(1024);
         }
+
+        static size_t copy_out(uint8_t* dst, size_t maxLen, const char* src, size_t srcLen, size_t& srcOff) {
+            if (!src || srcOff >= srcLen || maxLen == 0) return 0;
+            const size_t n = (srcLen - srcOff) < maxLen ? (srcLen - srcOff) : maxLen;
+            memcpy(dst, src + srcOff, n);
+            srcOff += n;
+            return n;
+        }
+
+        void set_piece(const char* p, size_t n) {
+            cur = p;
+            cur_len = n;
+            cur_off = 0;
+        }
+
+        bool next_piece() {
+            static const char* kTemplateIds[] = {
+                macro_templates::kTemplateRoundRing9,
+                macro_templates::kTemplateRoundPie8,
+                macro_templates::kTemplateStackSides5,
+                macro_templates::kTemplateWideSides3,
+                macro_templates::kTemplateSplitSides4,
+            };
+
+            scratch.remove(0);
+            item_json.remove(0);
+
+            switch (phase) {
+                case Phase::Header: {
+                    // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
+                    char hdr[256];
+                    snprintf(
+                        hdr,
+                        sizeof(hdr),
+                        "{\"success\":true,\"version\":9,\"buttons_per_screen\":%u,\"defaults\":{\"screen_bg\":%u,\"button_bg\":%u,\"icon_color\":%u,\"label_color\":%u},\"templates\":[",
+                        (unsigned)MACROS_BUTTONS_PER_SCREEN,
+                        (unsigned)macro_config.default_screen_bg,
+                        (unsigned)macro_config.default_button_bg,
+                        (unsigned)macro_config.default_icon_color,
+                        (unsigned)macro_config.default_label_color);
+                    scratch += hdr;
+                    set_piece(scratch.c_str(), scratch.length());
+                    phase = Phase::Templates;
+                    return true;
+                }
+
+                case Phase::Templates: {
+                    while (tpl_i < (int)(sizeof(kTemplateIds) / sizeof(kTemplateIds[0]))) {
+                        const char* id = kTemplateIds[tpl_i++];
+                        if (!id || !*id) continue;
+                        const char* layout = macro_templates::selector_layout_json(id);
+                        if (!layout) continue;
+
+                        if (!tpl_first) scratch += ",";
+                        tpl_first = false;
+                        scratch += "{\"id\":\"";
+                        scratch += id;
+                        scratch += "\",\"name\":\"";
+                        scratch += macro_templates::display_name(id);
+                        scratch += "\",\"selector_layout\":";
+                        scratch += layout;
+                        scratch += "}";
+
+                        set_piece(scratch.c_str(), scratch.length());
+                        return true;
+                    }
+                    phase = Phase::AfterTemplates;
+                    return next_piece();
+                }
+
+                case Phase::AfterTemplates: {
+                    set_piece("],\"screens\":[", strlen("],\"screens\":["));
+                    phase = Phase::ScreenStart;
+                    screen_i = 0;
+                    btn_i = 0;
+                    return true;
+                }
+
+                case Phase::ScreenStart: {
+                    if (screen_i >= MACROS_SCREEN_COUNT) {
+                        phase = Phase::AfterScreens;
+                        return next_piece();
+                    }
+
+                    if (screen_i > 0) scratch += ",";
+                    const char* tpl = macro_config.template_id[screen_i];
+                    if (!macro_templates::is_valid(tpl)) {
+                        tpl = macro_templates::default_id();
+                    }
+
+                    scratch += "{\"template\":\"";
+                    scratch += tpl;
+                    scratch += "\"";
+
+                    if (macro_config.screen_bg[screen_i] != MACROS_COLOR_UNSET) {
+                        scratch += ",\"screen_bg\":";
+                        scratch += (unsigned)macro_config.screen_bg[screen_i];
+                    }
+
+                    scratch += ",\"buttons\":[";
+                    set_piece(scratch.c_str(), scratch.length());
+                    phase = Phase::Buttons;
+                    btn_i = 0;
+                    return true;
+                }
+
+                case Phase::Buttons: {
+                    if (btn_i >= MACROS_BUTTONS_PER_SCREEN) {
+                        phase = Phase::ScreenEnd;
+                        return next_piece();
+                    }
+
+                    const MacroButtonConfig* btn = &macro_config.buttons[screen_i][btn_i];
+
+                    // Use ArduinoJson to correctly escape strings.
+                    StaticJsonDocument<768> item;
+                    item["label"] = btn->label;
+                    item["action"] = macro_action_to_string(btn->action);
+                    item["payload"] = btn->payload;
+                    item["mqtt_topic"] = btn->mqtt_topic;
+
+                    JsonObject icon = item.createNestedObject("icon");
+                    icon["type"] = macro_icon_type_to_string(btn->icon.type);
+                    icon["id"] = btn->icon.id;
+                    icon["display"] = btn->icon.display;
+
+                    if (btn->button_bg != MACROS_COLOR_UNSET) item["button_bg"] = btn->button_bg;
+                    if (btn->icon_color != MACROS_COLOR_UNSET) item["icon_color"] = btn->icon_color;
+                    if (btn->label_color != MACROS_COLOR_UNSET) item["label_color"] = btn->label_color;
+
+                    // serializeJson(doc, String&) overwrites the destination, so build the
+                    // delimiter + object into scratch and stream that.
+                    if (btn_i > 0) scratch += ",";
+                    serializeJson(item, item_json);
+                    scratch += item_json;
+                    btn_i++;
+
+                    set_piece(scratch.c_str(), scratch.length());
+                    return true;
+                }
+
+                case Phase::ScreenEnd: {
+                    set_piece("]}", strlen("]}"));
+                    phase = Phase::ScreenStart;
+                    screen_i++;
+                    return true;
+                }
+
+                case Phase::AfterScreens: {
+                    set_piece("]}", strlen("]}"));
+                    phase = Phase::Done;
+                    return true;
+                }
+
+                case Phase::Done:
+                default:
+                    return false;
+            }
+        }
+
+        size_t fill(uint8_t* buffer, size_t maxLen) {
+            size_t wrote = 0;
+            while (wrote < maxLen) {
+                if (!cur || cur_off >= cur_len) {
+                    if (!next_piece()) {
+                        break;
+                    }
+                }
+                const size_t n = copy_out(buffer + wrote, maxLen - wrote, cur, cur_len, cur_off);
+                if (n == 0) {
+                    // Safety: avoid infinite loops if something goes wrong.
+                    cur = nullptr;
+                    cur_len = 0;
+                    cur_off = 0;
+                    continue;
+                }
+                wrote += n;
+            }
+            return wrote;
+        }
+    };
+
+    MacrosChunker* st = new MacrosChunker();
+    if (!st) {
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
     }
-    response->print("]");
 
-    response->print(",\"screens\":[");
-
-    for (int s = 0; s < MACROS_SCREEN_COUNT; s++) {
-        if (s > 0) response->print(",");
-        const char* tpl = macro_config.template_id[s];
-        if (!macro_templates::is_valid(tpl)) {
-            tpl = macro_templates::default_id();
+    AsyncWebServerResponse* response = request->beginChunkedResponse(
+        "application/json",
+        [st](uint8_t* buffer, size_t maxLen, size_t /*index*/) mutable -> size_t {
+            if (!st) return 0;
+            const size_t n = st->fill(buffer, maxLen);
+            if (n == 0) {
+                delete st;
+                st = nullptr;
+            }
+            return n;
         }
+    );
 
-        response->print("{\"template\":\"");
-        response->print(tpl);
-        response->print("\"");
-
-        // Optional per-screen override
-        if (macro_config.screen_bg[s] != MACROS_COLOR_UNSET) {
-            response->print(",\"screen_bg\":");
-            response->print((unsigned)macro_config.screen_bg[s]);
-        }
-
-        response->print(",\"buttons\":[");
-
-        for (int b = 0; b < MACROS_BUTTONS_PER_SCREEN; b++) {
-            const MacroButtonConfig *btn = &macro_config.buttons[s][b];
-            if (b > 0) response->print(",");
-
-            // Use ArduinoJson to correctly escape strings, but keep the document tiny.
-            StaticJsonDocument<768> item;
-            item["label"] = btn->label;
-            item["action"] = macro_action_to_string(btn->action);
-            item["payload"] = btn->payload;
-            item["mqtt_topic"] = btn->mqtt_topic;
-
-            JsonObject icon = item.createNestedObject("icon");
-            icon["type"] = macro_icon_type_to_string(btn->icon.type);
-            icon["id"] = btn->icon.id;
-            icon["display"] = btn->icon.display;
-
-            if (btn->button_bg != MACROS_COLOR_UNSET) item["button_bg"] = btn->button_bg;
-            if (btn->icon_color != MACROS_COLOR_UNSET) item["icon_color"] = btn->icon_color;
-            if (btn->label_color != MACROS_COLOR_UNSET) item["label_color"] = btn->label_color;
-            serializeJson(item, *response);
-        }
-
-        response->print("]}");
-    }
-
-    response->print("]}");
     request->send(response);
 }
 
