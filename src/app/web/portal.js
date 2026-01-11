@@ -1172,7 +1172,6 @@ function macrosBindEditorEvents() {
             const cfg = macrosGetSelectedButton();
             if (!cfg) return;
 
-            const action = (cfg.action || 'none');
             cfg.payload = macrosClampString(payloadEl.value, MACROS_PAYLOAD_MAX);
             if (payloadEl.value !== cfg.payload) payloadEl.value = cfg.payload;
             macrosSetDirty(true);

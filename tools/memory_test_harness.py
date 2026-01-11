@@ -166,6 +166,12 @@ def _best_effort_git_info() -> dict[str, Any]:
     }
 
 
+def _basic_auth_header(auth: str) -> str:
+    # auth form: user:pass
+    token = base64.b64encode(auth.encode("utf-8")).decode("ascii")
+    return f"Basic {token}"
+
+
 def _auto_port() -> Optional[str]:
     for candidate in ("/dev/ttyACM0", "/dev/ttyUSB0"):
         if os.path.exists(candidate):
@@ -218,7 +224,6 @@ class SerialFollower:
         fd = os.open(self.port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         self._fd = fd
 
-        attrs = termios.tcgetattr(fd)
         tty.setraw(fd)
         attrs = termios.tcgetattr(fd)
 
@@ -255,7 +260,7 @@ class SerialFollower:
         if self._fd is not None:
             try:
                 os.close(self._fd)
-            except Exception:
+            except OSError:
                 pass
             self._fd = None
 
@@ -544,9 +549,7 @@ class Harness:
     def _auth_header(self) -> Optional[str]:
         if not self.cfg.auth:
             return None
-        # auth form: user:pass
-        token = base64.b64encode(self.cfg.auth.encode("utf-8")).decode("ascii")
-        return f"Basic {token}"
+        return _basic_auth_header(self.cfg.auth)
 
     def http(
         self,
@@ -729,8 +732,9 @@ class Harness:
         try:
             conn = http.client.HTTPConnection(host, port, timeout=0.5)
             headers = {"Connection": "close"}
-            if self.cfg.auth:
-                headers["Authorization"] = _basic_auth_header(self.cfg.auth)
+            ah = self._auth_header()
+            if ah:
+                headers["Authorization"] = ah
             conn.request("POST", path, headers=headers)
             # Intentionally do NOT call getresponse(); device may reboot before replying.
             conn.close()
@@ -926,8 +930,8 @@ class Harness:
                     {"name": t.get("name"), "stack_rem": t.get("stack_rem"), "core": t.get("core"), "prio": t.get("prio")}
                     for t in tasks_sorted[:6]
                 ]
-            except Exception:
-                pass
+            except Exception as e:
+                tw_summary["tasks_error"] = str(e)
 
             derived["tripwire"] = tw_summary
         else:
@@ -1335,7 +1339,7 @@ class Harness:
                 j = json.loads(body)
                 if isinstance(j, dict):
                     mqtt_host = str(j.get("mqtt_host") or "")
-            except Exception:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 pass
         if not mqtt_host:
             with open(self.paths["structured"], "a", encoding="utf-8") as f:
