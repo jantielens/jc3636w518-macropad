@@ -46,4 +46,8 @@ DeviceMemorySnapshot device_telemetry_get_memory_snapshot();
 // Convenience logging helper (single line) using LogManager.
 void device_telemetry_log_memory_snapshot(const char *tag);
 
+// Dump a best-effort per-task stack high-water report to serial logs.
+// Intended for diagnosing internal heap pressure (stack sizing, fragmentation).
+void device_telemetry_dump_task_stack_watermarks(const char *tag);
+
 #endif // DEVICE_TELEMETRY_H

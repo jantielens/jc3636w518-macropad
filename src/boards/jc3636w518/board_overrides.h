@@ -23,6 +23,10 @@
 // Enable BLE HID keyboard support.
 #define HAS_BLE_KEYBOARD true
 
+// NimBLE: prefer external PSRAM for host allocations (saves internal RAM).
+// This must also be passed as a global -D so the NimBLE-Arduino library compiles with it.
+#define CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL 1
+
 // Enable Image Upload API on this board
 // Enable Image API on this board.
 #define HAS_IMAGE_API true
@@ -33,9 +37,13 @@
 // ---------------------------------------------------------------------------
 // Networking / AsyncTCP
 // ---------------------------------------------------------------------------
-// Reduce AsyncTCP task stack a bit to reclaim internal RAM.
-// (The web portal defines a default, but allows per-board overrides.)
-#define CONFIG_ASYNC_TCP_STACK_SIZE 10240
+// AsyncTCP task stack (FreeRTOS task stack lives in internal RAM).
+// Watermarks in S2/S4 show ~1.4–1.6KB typical usage, so 6KB is a safe step-down.
+#define CONFIG_ASYNC_TCP_STACK_SIZE 6144
+
+// Memory diagnostics defaults are intentionally kept quiet for normal use.
+// For automated memory tests, temporarily override these (e.g. HEARTBEAT_INTERVAL_MS=5000,
+// MEMORY_SNAPSHOT_ON_HTTP_ENABLED=1, MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES=30*1024).
 
 // PSRAM board: allow larger full-image uploads than the global default.
 // High-entropy JPEGs at higher quality can exceed 100KB.
@@ -60,9 +68,10 @@
 // UI rotation (LVGL).
 #define DISPLAY_ROTATION 0
 
-// Match the sample: prefer PSRAM for LVGL draw buffer (fallback handled in DisplayManager).
-// Prefer internal RAM over PSRAM for LVGL draw buffer allocation.
-#define LVGL_BUFFER_PREFER_INTERNAL true
+// Prefer PSRAM first for LVGL draw buffer (fallback handled in DisplayManager).
+#define LVGL_BUFFER_PREFER_INTERNAL false
+// Prefer PSRAM first for the ESP_Panel ST77916 swap buffer (fallbacks exist).
+#define ESP_PANEL_SWAPBUF_PREFER_INTERNAL false
 // LVGL draw buffer size in pixels.
 #define LVGL_BUFFER_SIZE (DISPLAY_WIDTH * 16)  // 16 rows (matches sample default)
 

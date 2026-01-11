@@ -274,26 +274,42 @@ void ESPPanel_ST77916_Driver::init() {
     swapBufCapacityPixels = (uint32_t)LVGL_BUFFER_SIZE;
     swapBuf = nullptr;
 
-    // Prefer internal DMA-capable memory for reliability on QSPI flush.
-    // Some panel/bus implementations can stall when given PSRAM-backed buffers.
-#if defined(MALLOC_CAP_DMA)
-    swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels,
-                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-#else
-    swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels,
-                                         MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!ESP_PANEL_SWAPBUF_PREFER_INTERNAL) {
+#if SOC_SPIRAM_SUPPORTED
+        if (psramFound()) {
+            // Prefer PSRAM first when configured. Note: some panel/bus implementations may
+            // be more reliable with internal/DMA-capable buffers, so we keep fallbacks.
+            swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels, MALLOC_CAP_SPIRAM);
+        }
 #endif
+    }
+
+    if (!swapBuf) {
+        // Prefer internal DMA-capable memory for reliability on QSPI flush.
+        // Some panel/bus implementations can stall when given PSRAM-backed buffers.
+#if defined(MALLOC_CAP_DMA)
+        swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels,
+                                             MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+#else
+        swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels,
+                                             MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+#endif
+    }
+
     if (!swapBuf) {
         // Fallback: internal RAM without DMA capability (still often works, depends on underlying driver).
         swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels,
                                              MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     }
+
+    if (!swapBuf && ESP_PANEL_SWAPBUF_PREFER_INTERNAL) {
 #if SOC_SPIRAM_SUPPORTED
-    if (!swapBuf && psramFound()) {
-        // Last resort: PSRAM.
-        swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels, MALLOC_CAP_SPIRAM);
-    }
+        if (psramFound()) {
+            // Last resort when we preferred internal.
+            swapBuf = (uint16_t*)heap_caps_malloc(sizeof(uint16_t) * swapBufCapacityPixels, MALLOC_CAP_SPIRAM);
+        }
 #endif
+    }
 
     if (swapBuf) {
         const size_t bytes = sizeof(uint16_t) * (size_t)swapBufCapacityPixels;

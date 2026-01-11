@@ -20,7 +20,7 @@
 #define KEY_BLOB  "b"
 
 #define MACROS_MAGIC 0x4D414352u // 'MACR'
-#define MACROS_VERSION 8
+#define MACROS_VERSION 9
 
 static Preferences prefs;
 
@@ -186,6 +186,7 @@ void macros_config_set_defaults(MacroConfig* cfg) {
             cfg->buttons[s][b].action = MacroButtonAction::None;
             cfg->buttons[s][b].label[0] = '\0';
             cfg->buttons[s][b].payload[0] = '\0';
+            cfg->buttons[s][b].mqtt_topic[0] = '\0';
 
             cfg->buttons[s][b].icon.type = MacroIconType::None;
             cfg->buttons[s][b].icon.id[0] = '\0';

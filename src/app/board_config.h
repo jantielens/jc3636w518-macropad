@@ -76,6 +76,24 @@
 #endif
 
 // ============================================================================
+// Instrumentation / Telemetry Defaults
+// ============================================================================
+
+// Heartbeat interval (used by the periodic [Mem] hb snapshot + status log).
+// Override per-board to speed up automated memory tests.
+#ifndef HEARTBEAT_INTERVAL_MS
+#define HEARTBEAT_INTERVAL_MS 60000UL
+#endif
+
+// When enabled, log memory snapshots from key runtime hotspots.
+// Originally added for HTTP handlers, but also used for other one-shot hotspot tags
+// (e.g. MQTT connect/discovery, macro apply, LVGL screen switch) so automated
+// scenarios can finish before the normal heartbeat fires and still produce tags.
+#ifndef MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+#define MEMORY_SNAPSHOT_ON_HTTP_ENABLED 0
+#endif
+
+// ============================================================================
 // Additional Default Configuration Settings
 // ============================================================================
 // Add new hardware features here using #ifndef guards to allow board-specific
@@ -189,6 +207,29 @@
 // Prefer internal RAM over PSRAM for LVGL draw buffer allocation.
 #ifndef LVGL_BUFFER_PREFER_INTERNAL
 #define LVGL_BUFFER_PREFER_INTERNAL false
+#endif
+
+// ESP_Panel (ST77916 QSPI): prefer allocating the optional byte-swap buffer in
+// internal RAM first for maximum flush reliability.
+// Prefer internal RAM over PSRAM for ESP_Panel swap buffer allocation.
+#ifndef ESP_PANEL_SWAPBUF_PREFER_INTERNAL
+#define ESP_PANEL_SWAPBUF_PREFER_INTERNAL true
+#endif
+
+// ============================================================================
+// Memory Diagnostics (instrumentation)
+// ============================================================================
+// When enabled, the firmware will emit a one-shot task stack watermark dump to
+// serial if internal min heap drops below a threshold.
+// This helps identify stack/heap pressure sources without requiring HTTP calls.
+#ifndef MEMORY_TRIPWIRE_ENABLED
+#define MEMORY_TRIPWIRE_ENABLED true
+#endif
+
+// Trigger threshold for internal min heap (bytes).
+// Keep this low to avoid noise; it is intended to catch cliff-edge events.
+#ifndef MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES
+#define MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES (10 * 1024)
 #endif
 
 // Select the touch HAL backend (one of the TOUCH_DRIVER_* constants).

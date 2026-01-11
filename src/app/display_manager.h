@@ -9,6 +9,7 @@
 #include "screens/info_screen.h"
 #include "screens/test_screen.h"
 #include "screens/macropad_screen.h"
+#include "screens/error_screen.h"
 #include "macros_config.h"
 
 #if HAS_IMAGE_API
@@ -31,6 +32,7 @@
 
 struct MacroConfig;
 class BleKeyboardManager;
+class MqttManager;
 
 // Struct for registering available screens dynamically
 struct ScreenInfo {
@@ -81,6 +83,11 @@ private:
     SplashScreen splashScreen;
     InfoScreen infoScreen;
     TestScreen testScreen;
+    ErrorScreen errorScreen;
+
+    // Error state (copied in; owned by DisplayManager)
+    char errorTitle[48];
+    char errorMessage[192];
 
     // When called off the LVGL task we try a bounded mutex wait. If that fails,
     // defer the splash status update and apply it from the LVGL task loop.
@@ -117,6 +124,7 @@ private:
     // Macro runtime pointers (owned elsewhere; set by app.ino after init)
     MacroConfig* macroConfig;
     BleKeyboardManager* bleKeyboard;
+    MqttManager* mqttManager;
     
     // Hardware initialization
     void initHardware();
@@ -155,6 +163,13 @@ public:
     void setMacroRuntime(MacroConfig* cfg, BleKeyboardManager* keyboard);
     const MacroConfig* getMacroConfig() const { return macroConfig; }
     BleKeyboardManager* getBleKeyboard() const { return bleKeyboard; }
+
+    // Optional runtime pointer for macro actions.
+    void setMqttManager(MqttManager* mqtt) { mqttManager = mqtt; }
+    MqttManager* getMqttManager() const { return mqttManager; }
+
+    // Show a generic error screen (thread-safe).
+    void showError(const char* title, const char* message);
     
     #if HAS_IMAGE_API
     void showDirectImage();
@@ -224,6 +239,13 @@ void display_manager_set_backlight_brightness(uint8_t brightness);  // 0-100%
 // Provide macro runtime pointers used by MacroPadScreen.
 // Safe to call multiple times.
 void display_manager_set_macro_runtime(MacroConfig* cfg, BleKeyboardManager* keyboard);
+
+// Show a generic error screen (title/message copied).
+void display_manager_show_error(const char* title, const char* message);
+
+// Provide MQTT manager pointer for runtime features like macro actions.
+// Safe to call with nullptr.
+void display_manager_set_mqtt_manager(MqttManager* mqtt);
 
 // Serialization helpers for code running outside the LVGL task.
 // Use these to avoid concurrent access to buffered display backends (e.g., Arduino_GFX canvas).

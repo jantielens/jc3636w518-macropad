@@ -32,6 +32,9 @@ void MqttManager::begin(const DeviceConfig *config, const char *friendly_name, c
     _client.setBufferSize(MQTT_MAX_PACKET_SIZE);
 
     _discovery_published_this_boot = false;
+    _logged_snapshot_connect_attempt = false;
+    _logged_snapshot_connected = false;
+    _logged_snapshot_first_publish = false;
     _last_reconnect_attempt_ms = 0;
     _last_health_publish_ms = 0;
 }
@@ -67,6 +70,13 @@ bool MqttManager::publish(const char *topic, const char *payload, bool retained)
     if (!enabled() || !_client.connected()) return false;
     if (!topic || !payload) return false;
 
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    if (!_logged_snapshot_first_publish) {
+        device_telemetry_log_memory_snapshot("mqtt_first_publish");
+        _logged_snapshot_first_publish = true;
+    }
+#endif
+
     return _client.publish(topic, payload, retained);
 }
 
@@ -82,6 +92,13 @@ bool MqttManager::publishJson(const char *topic, JsonDocument &doc, bool retaine
     }
 
     if (!enabled() || !_client.connected()) return false;
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    if (!_logged_snapshot_first_publish) {
+        device_telemetry_log_memory_snapshot("mqtt_first_publish");
+        _logged_snapshot_first_publish = true;
+    }
+#endif
     return _client.publish(topic, (const uint8_t*)payload, (unsigned)n, retained);
 }
 
@@ -98,7 +115,15 @@ void MqttManager::publishDiscoveryOncePerBoot() {
     if (_discovery_published_this_boot) return;
 
     Logger.logMessage("MQTT", "Publishing HA discovery");
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    device_telemetry_log_memory_snapshot("mqtt_discovery_pre");
+#endif
     ha_discovery_publish_health(*this);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    device_telemetry_log_memory_snapshot("mqtt_discovery_post");
+#endif
     _discovery_published_this_boot = true;
 }
 
@@ -176,6 +201,13 @@ void MqttManager::ensureConnected() {
 
     Logger.logMessagef("MQTT", "Connecting to %s:%d", _config->mqtt_host, resolvedPort());
 
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    if (!_logged_snapshot_connect_attempt) {
+        device_telemetry_log_memory_snapshot("mqtt_connect_attempt");
+        _logged_snapshot_connect_attempt = true;
+    }
+#endif
+
     bool connected = false;
     if (has_user) {
         const char *pass = has_pass ? _config->mqtt_password : "";
@@ -200,6 +232,13 @@ void MqttManager::ensureConnected() {
 
     if (connected) {
         Logger.logMessage("MQTT", "Connected");
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+        if (!_logged_snapshot_connected) {
+            device_telemetry_log_memory_snapshot("mqtt_connected");
+            _logged_snapshot_connected = true;
+        }
+#endif
         publishAvailability(true);
         publishDiscoveryOncePerBoot();
 

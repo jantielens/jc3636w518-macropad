@@ -238,27 +238,20 @@ static bool has_prefix(const char* s, const char* prefix) {
     return true;
 }
 
-struct KeepSet {
-    static constexpr size_t kMax = (size_t)MACROS_SCREEN_COUNT * (size_t)MACROS_BUTTONS_PER_SCREEN;
-    char ids[kMax][MACROS_ICON_ID_MAX_LEN];
-    size_t count = 0;
+static bool macros_use_icon_id(const MacroConfig* cfg, const char* id) {
+    if (!cfg || !id || !*id) return false;
 
-    bool contains(const char* id) const {
-        if (!id || !*id) return false;
-        for (size_t i = 0; i < count; i++) {
-            if (strcmp(ids[i], id) == 0) return true;
+    for (size_t s = 0; s < (size_t)MACROS_SCREEN_COUNT; s++) {
+        for (size_t b = 0; b < (size_t)MACROS_BUTTONS_PER_SCREEN; b++) {
+            const auto& icon = cfg->buttons[s][b].icon;
+            if (icon.type == MacroIconType::Emoji || icon.type == MacroIconType::Asset) {
+                if (strncmp(icon.id, id, (size_t)MACROS_ICON_ID_MAX_LEN) == 0) return true;
+            }
         }
-        return false;
     }
 
-    void add(const char* id) {
-        if (!id || !*id) return;
-        if (contains(id)) return;
-        if (count >= kMax) return;
-        strlcpy(ids[count], id, sizeof(ids[count]));
-        count++;
-    }
-};
+    return false;
+}
 
 } // namespace
 
@@ -397,16 +390,6 @@ bool icon_store_gc_unused_from_macros(const MacroConfig* cfg, size_t* out_delete
         return true;
     }
 
-    KeepSet keep;
-    for (size_t s = 0; s < (size_t)MACROS_SCREEN_COUNT; s++) {
-        for (size_t b = 0; b < (size_t)MACROS_BUTTONS_PER_SCREEN; b++) {
-            const auto& icon = cfg->buttons[s][b].icon;
-            if (icon.type == MacroIconType::Emoji || icon.type == MacroIconType::Asset) {
-                keep.add(icon.id);
-            }
-        }
-    }
-
     File dir = FFat.open("/icons");
     if (!dir || !dir.isDirectory()) {
         icons_end_op();
@@ -428,14 +411,14 @@ bool icon_store_gc_unused_from_macros(const MacroConfig* cfg, size_t* out_delete
 
             if (base && ext && strcmp(ext, ".bin") == 0) {
                 const size_t base_len = (size_t)(ext - base);
-                if (base_len > 0 && base_len < 64) {
+                if (base_len > 0 && base_len < (size_t)MACROS_ICON_ID_MAX_LEN) {
                     char id[64];
                     memset(id, 0, sizeof(id));
                     memcpy(id, base, base_len);
                     id[base_len] = '\0';
 
                     const bool managed = has_prefix(id, "emoji_") || has_prefix(id, "user_");
-                    if (managed && !keep.contains(id)) {
+                    if (managed && !macros_use_icon_id(cfg, id)) {
                         char path[96];
                         snprintf(path, sizeof(path), "/icons/%s.bin", id);
                         if (FFat.remove(path)) {

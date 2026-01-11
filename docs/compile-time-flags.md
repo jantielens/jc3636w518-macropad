@@ -12,7 +12,7 @@ This document is a template. Sections marked with `COMPILE_FLAG_REPORT` markers 
 ## Flags (generated)
 
 <!-- BEGIN COMPILE_FLAG_REPORT:FLAGS -->
-Total flags: 81
+Total flags: 87
 
 ### Features (HAS_*)
 
@@ -82,7 +82,7 @@ Total flags: 81
 
 ### Limits & Tuning
 
-- **CONFIG_ASYNC_TCP_STACK_SIZE** default: `(no default)` — (The web portal defines a default, but allows per-board overrides.)
+- **CONFIG_ASYNC_TCP_STACK_SIZE** default: `(no default)` — Watermarks in S2/S4 show ~1.4–1.6KB typical usage, so 6KB is a safe step-down.
 - **IMAGE_API_DECODE_HEADROOM_BYTES** default: `(50 * 1024)` — Extra free RAM required for decoding (bytes).
 - **IMAGE_API_DEFAULT_TIMEOUT_MS** default: `10000` — Default image display timeout in milliseconds.
 - **IMAGE_API_MAX_SIZE_BYTES** default: `(100 * 1024)` — Max bytes accepted for full image uploads (JPEG).
@@ -91,6 +91,7 @@ Total flags: 81
 - **LVGL_BUFFER_PREFER_INTERNAL** default: `false` — Prefer internal RAM over PSRAM for LVGL draw buffer allocation.
 - **LVGL_BUFFER_SIZE** default: `(DISPLAY_WIDTH * 10)` — LVGL draw buffer size in pixels (larger = faster, more RAM).
 - **LVGL_TICK_PERIOD_MS** default: `5` — LVGL tick period in milliseconds.
+- **MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES** default: `(10 * 1024)` — Keep this low to avoid noise; it is intended to catch cliff-edge events.
 - **TFT_SPI_FREQUENCY** default: `(no default)` — TFT SPI clock frequency.
 - **TFT_SPI_FREQ_HZ** default: `(no default)` — QSPI clock frequency (Hz).
 - **TOUCH_I2C_FREQ_HZ** default: `(no default)` — I2C frequency (Hz).
@@ -98,12 +99,17 @@ Total flags: 81
 
 ### Other
 
+- **CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL** default: `(no default)` — This must also be passed as a global -D so the NimBLE-Arduino library compiles with it.
 - **DISPLAY_COLOR_ORDER_BGR** default: `(no default)` — Panel uses BGR byte order.
 - **DISPLAY_DRIVER_ILI9341_2** default: `(no default)` — Use the ILI9341_2 controller setup in TFT_eSPI.
 - **DISPLAY_INVERSION_ON** default: `(no default)` — Enable display inversion (panel-specific).
 - **DISPLAY_NEEDS_GAMMA_FIX** default: `(no default)` — Apply gamma correction fix for this panel variant.
+- **ESP_PANEL_SWAPBUF_PREFER_INTERNAL** default: `true` — Prefer internal RAM over PSRAM for ESP_Panel swap buffer allocation.
+- **HEARTBEAT_INTERVAL_MS** default: `60000UL` — Override per-board to speed up automated memory tests.
 - **LCD_QSPI_HOST** default: `(no default)` — QSPI host peripheral.
 - **LED_ACTIVE_HIGH** default: `true` — LED polarity: true if HIGH turns the LED on.
+- **MEMORY_SNAPSHOT_ON_HTTP_ENABLED** default: `0` — scenarios can finish before the normal heartbeat fires and still produce tags.
+- **MEMORY_TRIPWIRE_ENABLED** default: `true` — This helps identify stack/heap pressure sources without requiring HTTP calls.
 - **PROJECT_DISPLAY_NAME** default: `"ESP32 Device"` — Human-friendly project name used in the web UI and device name (can be set by build system).
 - **TFT_BACKLIGHT_ON** default: `(no default)` — Backlight "on" level.
 - **TFT_BACKLIGHT_PWM_CHANNEL** default: `0` — LEDC channel used for backlight PWM.
@@ -181,6 +187,7 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
   - src/app/icon_store.cpp
   - src/app/icon_store.h
   - src/app/lv_conf.h
+  - src/app/screens/error_screen.cpp
   - src/app/screens/macropad_screen.cpp
   - src/app/web_portal.cpp
 - **HAS_IMAGE_API**
@@ -212,6 +219,7 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
   - src/app/ha_discovery.h
   - src/app/mqtt_manager.cpp
   - src/app/mqtt_manager.h
+  - src/app/screens/macropad_screen.cpp
 - **HAS_TOUCH**
   - src/app/app.ino
   - src/app/board_config.h
@@ -230,12 +238,18 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
   - src/app/touch_manager.cpp
 - **CONFIG_ASYNC_TCP_STACK_SIZE**
   - src/app/web_portal.cpp
+- **CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL**
+  - src/app/sdkconfig.h
 - **DISPLAY_INVERSION_ON**
   - src/app/drivers/tft_espi_driver.cpp
 - **DISPLAY_NEEDS_GAMMA_FIX**
   - src/app/drivers/tft_espi_driver.cpp
 - **DISPLAY_ROTATION**
   - src/app/touch_manager.cpp
+- **ESP_PANEL_SWAPBUF_PREFER_INTERNAL**
+  - src/app/board_config.h
+- **HEARTBEAT_INTERVAL_MS**
+  - src/app/board_config.h
 - **IMAGE_API_DECODE_HEADROOM_BYTES**
   - src/app/board_config.h
 - **IMAGE_API_DEFAULT_TIMEOUT_MS**
@@ -259,6 +273,15 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
 - **LVGL_BUFFER_SIZE**
   - src/app/board_config.h
 - **LVGL_TICK_PERIOD_MS**
+  - src/app/board_config.h
+- **MEMORY_SNAPSHOT_ON_HTTP_ENABLED**
+  - src/app/board_config.h
+  - src/app/display_manager.cpp
+  - src/app/mqtt_manager.cpp
+  - src/app/web_portal.cpp
+- **MEMORY_TRIPWIRE_ENABLED**
+  - src/app/board_config.h
+- **MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES**
   - src/app/board_config.h
 - **PROJECT_DISPLAY_NAME**
   - src/app/board_config.h

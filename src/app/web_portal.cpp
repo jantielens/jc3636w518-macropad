@@ -5,10 +5,12 @@
  * Serves static files and provides REST API for configuration.
  */
 
-// Increase AsyncTCP task stack size to prevent overflow
-// Default is 8192, increase to 16384 for web assets
+// AsyncTCP task stack size (FreeRTOS task stack lives in internal RAM).
+// Boards may override this in their board_overrides.h.
+// Historical runs show CONFIG_ASYNC_TCP_STACK_SIZE(raw)=10240 for this project;
+// keep a conservative default here for boards without overrides.
 #ifndef CONFIG_ASYNC_TCP_STACK_SIZE
-#define CONFIG_ASYNC_TCP_STACK_SIZE 16384
+#define CONFIG_ASYNC_TCP_STACK_SIZE 10240
 #endif
 
 #include "web_portal.h"
@@ -112,6 +114,32 @@ static bool g_macros_body_in_progress = false;
 // If MACROS_* dimensions or max string sizes are increased, adjust this accordingly.
 static constexpr size_t kMacrosJsonDocCapacity = 65536;
 
+struct MacrosJsonAllocator {
+    void* allocate(size_t size) {
+#if SOC_SPIRAM_SUPPORTED
+        if (psramFound()) {
+            void* p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (p) return p;
+        }
+#endif
+        return heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    void deallocate(void* ptr) {
+        heap_caps_free(ptr);
+    }
+
+    void* reallocate(void* ptr, size_t new_size) {
+#if SOC_SPIRAM_SUPPORTED
+        if (psramFound()) {
+            void* p = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (p) return p;
+        }
+#endif
+        return heap_caps_realloc(ptr, new_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+};
+
 // Protect macros upload globals from theoretical cross-task interleaving.
 static portMUX_TYPE g_macros_body_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -203,6 +231,7 @@ static const char* macro_action_to_string(MacroButtonAction a) {
         case MacroButtonAction::NavNextScreen: return "nav_next";
         case MacroButtonAction::NavToScreen: return "nav_to";
         case MacroButtonAction::GoBack: return "go_back";
+        case MacroButtonAction::MqttSend: return "mqtt_send";
         default: return "none";
     }
 }
@@ -234,6 +263,7 @@ static MacroButtonAction macro_action_from_string(const char* s) {
     if (strcasecmp(s, "nav_next") == 0) return MacroButtonAction::NavNextScreen;
     if (strcasecmp(s, "nav_to") == 0) return MacroButtonAction::NavToScreen;
     if (strcasecmp(s, "go_back") == 0) return MacroButtonAction::GoBack;
+    if (strcasecmp(s, "mqtt_send") == 0) return MacroButtonAction::MqttSend;
     return MacroButtonAction::None;
 }
 
@@ -258,7 +288,7 @@ void handleGetMacros(AsyncWebServerRequest *request) {
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     // Keep this in sync with src/app/macros_config.cpp (MACROS_VERSION).
-    response->print("{\"success\":true,\"version\":8,\"buttons_per_screen\":");
+    response->print("{\"success\":true,\"version\":9,\"buttons_per_screen\":");
     response->print((unsigned)MACROS_BUTTONS_PER_SCREEN);
 
     // Global defaults (always present)
@@ -327,10 +357,11 @@ void handleGetMacros(AsyncWebServerRequest *request) {
             if (b > 0) response->print(",");
 
             // Use ArduinoJson to correctly escape strings, but keep the document tiny.
-            StaticJsonDocument<512> item;
+            StaticJsonDocument<768> item;
             item["label"] = btn->label;
             item["action"] = macro_action_to_string(btn->action);
             item["payload"] = btn->payload;
+            item["mqtt_topic"] = btn->mqtt_topic;
 
             JsonObject icon = item.createNestedObject("icon");
             icon["type"] = macro_icon_type_to_string(btn->icon.type);
@@ -386,9 +417,25 @@ void handleGetInstalledIcons(AsyncWebServerRequest *request) {
 
     #if HAS_DISPLAY && HAS_ICONS
     // Build a bounded JSON response.
-    char json[4096];
-    icon_store_list_installed(json, sizeof(json));
+    // NOTE: AsyncWebServer handlers execute on the AsyncTCP task; avoid large stack allocations.
+    static constexpr size_t kInstalledIconsJsonMaxLen = 4096;
+    char* json = nullptr;
+#if SOC_SPIRAM_SUPPORTED
+    if (psramFound()) {
+        json = (char*)heap_caps_malloc(kInstalledIconsJsonMaxLen, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+#endif
+    if (!json) {
+        json = (char*)malloc(kInstalledIconsJsonMaxLen);
+    }
+    if (!json) {
+        request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
+
+    icon_store_list_installed(json, kInstalledIconsJsonMaxLen);
     request->send(200, "application/json", json);
+    free(json);
     #else
     request->send(200, "application/json", "{\"success\":true,\"source\":\"ffat\",\"icons\":[]}");
     #endif
@@ -579,14 +626,22 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
         return;
     }
 
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    // Capture heap state right before we allocate/parse the JSON document.
+    device_telemetry_log_memory_snapshot("http_macros_post_begin");
+#endif
+
     // Parse JSON body
-    DynamicJsonDocument doc(kMacrosJsonDocCapacity);
+    BasicJsonDocument<MacrosJsonAllocator> doc(kMacrosJsonDocCapacity);
     DeserializationError error = deserializeJson(doc, g_macros_body, total);
 
     macros_body_reset();
 
     if (error) {
         Logger.logMessagef("Macros", "JSON parse error: %s", error.c_str());
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+        device_telemetry_log_memory_snapshot("http_macros_post_parse_fail");
+#endif
         if (error == DeserializationError::NoMemory) {
             request->send(413, "application/json", "{\"success\":false,\"message\":\"JSON body too large\"}");
             return;
@@ -594,6 +649,10 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
         request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
         return;
     }
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    device_telemetry_log_memory_snapshot("http_macros_post_parsed");
+#endif
 
     // Basic shape validation
     if (!doc.containsKey("screens") || !doc["screens"].is<JsonArray>()) {
@@ -678,6 +737,7 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             const char* label = bo["label"] | "";
             const char* action_s = bo["action"] | "none";
             const char* payload = bo["payload"] | "";
+            const char* mqtt_topic = bo["mqtt_topic"] | "";
 
             MacroIconType iconType = MacroIconType::None;
             const char* iconId = "";
@@ -692,6 +752,7 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             strlcpy(next->buttons[s][b].label, label, sizeof(next->buttons[s][b].label));
             next->buttons[s][b].action = macro_action_from_string(action_s);
             strlcpy(next->buttons[s][b].payload, payload, sizeof(next->buttons[s][b].payload));
+            strlcpy(next->buttons[s][b].mqtt_topic, mqtt_topic, sizeof(next->buttons[s][b].mqtt_topic));
 
             next->buttons[s][b].icon.type = iconType;
             strlcpy(next->buttons[s][b].icon.id, iconId, sizeof(next->buttons[s][b].icon.id));
@@ -705,13 +766,28 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
             // Normalize: if action is none, clear payload/icon to keep state tidy.
             if (next->buttons[s][b].action == MacroButtonAction::None) {
                 next->buttons[s][b].payload[0] = '\0';
+                next->buttons[s][b].mqtt_topic[0] = '\0';
                 next->buttons[s][b].icon.type = MacroIconType::None;
                 next->buttons[s][b].icon.id[0] = '\0';
                 next->buttons[s][b].icon.display[0] = '\0';
             }
 
+            // Validate: mqtt_send requires a topic.
+            if (next->buttons[s][b].action == MacroButtonAction::MqttSend) {
+                if (!next->buttons[s][b].mqtt_topic[0]) {
+                    free(next);
+                    request->send(400, "application/json", "{\"success\":false,\"message\":\"mqtt_send requires mqtt_topic\"}");
+                    return;
+                }
+            }
+
+            // For non-MQTT actions, ignore stored mqtt_topic.
+            if (next->buttons[s][b].action != MacroButtonAction::MqttSend) {
+                next->buttons[s][b].mqtt_topic[0] = '\0';
+            }
+
             // For non-payload actions, ignore stored payload.
-            if (next->buttons[s][b].action != MacroButtonAction::SendKeys && next->buttons[s][b].action != MacroButtonAction::NavToScreen) {
+            if (next->buttons[s][b].action != MacroButtonAction::SendKeys && next->buttons[s][b].action != MacroButtonAction::NavToScreen && next->buttons[s][b].action != MacroButtonAction::MqttSend) {
                 next->buttons[s][b].payload[0] = '\0';
             }
         }
@@ -719,9 +795,16 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
 
     if (!macros_config_save(next)) {
         free(next);
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+        device_telemetry_log_memory_snapshot("http_macros_post_save_fail");
+#endif
         request->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to save\"}");
         return;
     }
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    device_telemetry_log_memory_snapshot("http_macros_post_saved");
+#endif
 
     g_macros_loaded = true;
 
@@ -729,6 +812,10 @@ void handlePostMacros(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     memcpy(&macro_config, next, sizeof(MacroConfig));
 
     free(next);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    device_telemetry_log_memory_snapshot("http_macros_post_applied");
+#endif
 
     request->send(200, "application/json", "{\"success\":true}\n");
 }
@@ -855,7 +942,15 @@ static bool github_fetch_latest_release(char *out_version, size_t out_version_le
         return false;
     }
 
-    DynamicJsonDocument doc(8192);
+    // Prefer PSRAM for this relatively large document.
+    BasicJsonDocument<MacrosJsonAllocator> doc(8192);
+    if (doc.capacity() == 0) {
+        if (out_error && out_error_len > 0) {
+            strlcpy(out_error, "OOM (GitHub JSON doc allocation failed)", out_error_len);
+        }
+        http.end();
+        return false;
+    }
     DeserializationError err = deserializeJson(doc, payload, DeserializationOption::Filter(filter));
     if (err) {
         if (out_error && out_error_len > 0) {
@@ -996,7 +1091,25 @@ static void firmware_update_task(void *pv) {
     strlcpy(firmware_update_state, "writing", sizeof(firmware_update_state));
 
     WiFiClient *stream = http.getStreamPtr();
-    uint8_t buf[2048];
+    uint8_t* buf = nullptr;
+#if SOC_SPIRAM_SUPPORTED
+    if (psramFound()) {
+        buf = (uint8_t*)heap_caps_malloc(2048, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+#endif
+    if (!buf) {
+        buf = (uint8_t*)heap_caps_malloc(2048, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!buf) {
+        strlcpy(firmware_update_state, "error", sizeof(firmware_update_state));
+        strlcpy(firmware_update_error, "OOM (OTA buffer alloc failed)", sizeof(firmware_update_error));
+        Update.abort();
+        http.end();
+        firmware_update_in_progress = false;
+        ota_in_progress = false;
+        vTaskDelete(nullptr);
+        return;
+    }
 
     while (http.connected() && (http_len > 0 || http_len == -1)) {
         const size_t available = stream->available();
@@ -1005,7 +1118,7 @@ static void firmware_update_task(void *pv) {
             continue;
         }
 
-        const size_t to_read = (available > sizeof(buf)) ? sizeof(buf) : available;
+        const size_t to_read = (available > 2048) ? 2048 : available;
         const int read_bytes = stream->readBytes(buf, to_read);
         if (read_bytes <= 0) {
             break;
@@ -1017,6 +1130,7 @@ static void firmware_update_task(void *pv) {
             strlcpy(firmware_update_error, "Flash write failed", sizeof(firmware_update_error));
             Update.abort();
             http.end();
+            free(buf);
             firmware_update_in_progress = false;
             ota_in_progress = false;
             vTaskDelete(nullptr);
@@ -1030,6 +1144,7 @@ static void firmware_update_task(void *pv) {
     }
 
     http.end();
+    free(buf);
 
     if (!Update.end(true)) {
         strlcpy(firmware_update_state, "error", sizeof(firmware_update_state));
@@ -1176,6 +1291,19 @@ static volatile bool pending_image_hide_request = false;
 
 // ===== WEB SERVER HANDLERS =====
 
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+static bool s_logged_http_root = false;
+static bool s_logged_http_network = false;
+static bool s_logged_http_firmware = false;
+
+// AsyncWebServer handlers run on the AsyncTCP task; log memory snapshots from
+// the main loop (web_portal_handle) to avoid extra allocator pressure in the
+// networking task.
+static volatile bool s_pending_http_root = false;
+static volatile bool s_pending_http_network = false;
+static volatile bool s_pending_http_firmware = false;
+#endif
+
 static AsyncWebServerResponse *begin_gzipped_asset_response(
     AsyncWebServerRequest *request,
     const char *content_type,
@@ -1216,6 +1344,12 @@ void handleRoot(AsyncWebServerRequest *request) {
             "no-store"
         );
         request->send(response);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+        if (!s_logged_http_root) {
+            s_pending_http_root = true;
+        }
+#endif
     }
 }
 
@@ -1248,6 +1382,12 @@ void handleNetwork(AsyncWebServerRequest *request) {
         "no-store"
     );
     request->send(response);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    if (!s_logged_http_network) {
+        s_pending_http_network = true;
+    }
+#endif
 }
 
 // Serve firmware update page
@@ -1266,6 +1406,12 @@ void handleFirmware(AsyncWebServerRequest *request) {
         "no-store"
     );
     request->send(response);
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    if (!s_logged_http_firmware) {
+        s_pending_http_firmware = true;
+    }
+#endif
 }
 
 // Serve CSS
@@ -1315,7 +1461,14 @@ void handleGetConfig(AsyncWebServerRequest *request) {
     }
     
     // Create JSON response (don't include passwords)
-    StaticJsonDocument<2304> doc;
+    // NOTE: AsyncWebServer handlers execute on the AsyncTCP task; avoid large stack allocations.
+    static constexpr size_t kConfigJsonDocCapacity = 2304;
+    BasicJsonDocument<MacrosJsonAllocator> doc(kConfigJsonDocCapacity);
+    if (doc.capacity() == 0) {
+        Logger.logMessage("Portal", "ERROR: /api/config OOM (JsonDocument allocation failed)");
+        request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
     doc["wifi_ssid"] = current_config->wifi_ssid;
     doc["wifi_password"] = ""; // Don't send password
     doc["device_name"] = current_config->device_name;
@@ -1381,7 +1534,14 @@ void handlePostConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len,
     }
     
     // Parse JSON body
-    StaticJsonDocument<2304> doc;
+    // NOTE: AsyncWebServer handlers execute on the AsyncTCP task; avoid large stack allocations.
+    static constexpr size_t kConfigJsonDocCapacity = 2304;
+    BasicJsonDocument<MacrosJsonAllocator> doc(kConfigJsonDocCapacity);
+    if (doc.capacity() == 0) {
+        Logger.logMessage("Portal", "ERROR: /api/config OOM (JsonDocument allocation failed)");
+        request->send(503, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return;
+    }
     DeserializationError error = deserializeJson(doc, data, len);
     
     if (error) {
@@ -2026,8 +2186,6 @@ void web_portal_init(DeviceConfig *config) {
     Logger.logBegin("Portal Init");
     
     current_config = config;
-    Logger.logLinef("Portal config pointer: %p, backlight_brightness: %d", 
-                    current_config, current_config->backlight_brightness);
 
     // Load macros config once at portal init so GET /api/macros is cheap.
     macros_cache_load_if_needed();
@@ -2207,9 +2365,7 @@ void web_portal_init(DeviceConfig *config) {
     image_cfg.max_timeout_ms = IMAGE_API_MAX_TIMEOUT_MS;
     
     // Initialize and register routes
-    Logger.logMessage("Portal", "Calling image_api_init...");
     image_api_init(image_cfg, backend);
-    Logger.logMessage("Portal", "Calling image_api_register_routes...");
     image_api_register_routes(server, portal_auth_gate);
     Logger.logMessage("Portal", "Image API initialized");
     #endif // HAS_IMAGE_API && HAS_DISPLAY
@@ -2280,6 +2436,25 @@ void web_portal_handle() {
     if (ap_mode_active) {
         dnsServer.processNextRequest();
     }
+
+#if MEMORY_SNAPSHOT_ON_HTTP_ENABLED
+    // Emit deferred per-page memory snapshots from the main loop.
+    if (s_pending_http_root && !s_logged_http_root) {
+        s_pending_http_root = false;
+        s_logged_http_root = true;
+        device_telemetry_log_memory_snapshot("http_root");
+    }
+    if (s_pending_http_network && !s_logged_http_network) {
+        s_pending_http_network = false;
+        s_logged_http_network = true;
+        device_telemetry_log_memory_snapshot("http_network");
+    }
+    if (s_pending_http_firmware && !s_logged_http_firmware) {
+        s_pending_http_firmware = false;
+        s_logged_http_firmware = true;
+        device_telemetry_log_memory_snapshot("http_firmware");
+    }
+#endif
 }
 
 // Check if in AP mode

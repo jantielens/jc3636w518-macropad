@@ -10,6 +10,10 @@
 #include "../log_manager.h"
 #include "../config_manager.h"
 
+#if HAS_MQTT
+#include "../mqtt_manager.h"
+#endif
+
 #if HAS_DISPLAY
 #include "../png_assets.h"
 #endif
@@ -50,6 +54,7 @@ static const char* actionToShortLabel(MacroButtonAction a) {
         case MacroButtonAction::NavNextScreen: return "Next";
         case MacroButtonAction::NavToScreen: return "Go";
         case MacroButtonAction::GoBack: return "Back";
+        case MacroButtonAction::MqttSend: return "MQTT";
         default: return "—";
     }
 }
@@ -134,29 +139,18 @@ static const lv_img_dsc_t* getOrCreateMask2x(const lv_img_dsc_t* src64) {
         return cached;
     }
 
-    // Pick an empty slot, otherwise evict the least recently used.
-    size_t slot = 0;
-    bool foundEmpty = false;
-    uint32_t oldest = 0xFFFFFFFFu;
+    // Pick an empty slot. Do NOT evict/reuse a slot that might still be referenced
+    // by an LVGL image object (it would invalidate the descriptor and can crash).
+    // If the cache is full, just skip 2x generation (caller will keep the 1x mask).
+    size_t slot = (size_t)-1;
     for (size_t i = 0; i < (sizeof(s_mask2xCache) / sizeof(s_mask2xCache[0])); i++) {
         if (!s_mask2xCache[i].data128) {
             slot = i;
-            foundEmpty = true;
             break;
         }
-        if (s_mask2xCache[i].lastUseTick < oldest) {
-            oldest = s_mask2xCache[i].lastUseTick;
-            slot = i;
-        }
     }
-
-    // (We intentionally don't free evicted buffers to avoid heap fragmentation.
-    //  Cache size is tiny and bounded.)
-    if (!foundEmpty) {
-        s_mask2xCache[slot].src64 = nullptr;
-        s_mask2xCache[slot].data128 = nullptr;
-        s_mask2xCache[slot].lastUseTick = 0;
-        memset(&s_mask2xCache[slot].dsc128, 0, sizeof(s_mask2xCache[slot].dsc128));
+    if (slot == (size_t)-1) {
+        return nullptr;
     }
 
     const uint16_t srcW = src64->header.w;
@@ -781,6 +775,35 @@ void MacroPadScreen::handleButtonClick(uint8_t b) {
 
         BleKeyboardManager* kb = getBleKeyboard();
         ducky_execute(btnCfg->payload, kb);
+        return;
+    }
+
+    if (btnCfg->action == MacroButtonAction::MqttSend) {
+        const char* topic = btnCfg->mqtt_topic;
+        const char* payload = btnCfg->payload;
+
+        if (!topic || topic[0] == '\0') {
+            displayMgr->showError("MQTT", "Missing topic");
+            return;
+        }
+
+        #if HAS_MQTT
+        MqttManager* mqtt = displayMgr->getMqttManager();
+        if (!mqtt) {
+            displayMgr->showError("MQTT", "MQTT manager not available");
+            return;
+        }
+
+        const bool ok = mqtt->publishImmediate(topic, payload ? payload : "", false);
+        if (!ok) {
+            Logger.logMessagef("Macro", "MQTT publish failed: topic=%s", topic);
+            displayMgr->showError("MQTT publish failed", topic);
+        }
+        #else
+        Logger.logMessagef("Macro", "MQTT not supported in this firmware: topic=%s", topic);
+        displayMgr->showError("MQTT", "Not supported in this firmware");
+        #endif
+
         return;
     }
 }
