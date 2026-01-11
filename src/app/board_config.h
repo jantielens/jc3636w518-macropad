@@ -262,9 +262,8 @@
 // ============================================================================
 // Icon Rendering (Macro buttons)
 // ============================================================================
-// Enables LVGL image widget usage for rendering compiled icon assets on buttons.
-// This is independent from HAS_IMAGE_API so projects can use icons without the
-// web-based Image API feature set.
+// Enables icon rendering on macro buttons (compiled icons + installed icons).
+// Independent from HAS_IMAGE_API (Image upload/download endpoints remain off).
 #ifndef HAS_ICONS
 #define HAS_ICONS false
 #endif
