@@ -224,7 +224,12 @@ static bool send_json_doc_chunked(AsyncWebServerRequest* request, JsonDoc& doc, 
         return false;
     }
 
-    st->payload.reserve(measureJson(doc) + 1);
+    const size_t requiredCapacity = measureJson(doc) + 1;
+    if (!st->payload.reserve(requiredCapacity)) {
+        delete st;
+        request->send(oom_http_status, "application/json", "{\"success\":false,\"message\":\"Out of memory\"}");
+        return false;
+    }
     serializeJson(doc, st->payload);
     send_chunked_state(request, "application/json", st);
     return true;
