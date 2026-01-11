@@ -22,7 +22,6 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from threading import Thread
-from typing import Any
 from urllib.parse import urlparse
 
 import http.client
