@@ -20,7 +20,7 @@ Total flags: 87
 - **HAS_BLE_KEYBOARD** default: `false` — Default: false (only enabled for boards that are known-good for NimBLE HID).
 - **HAS_BUILTIN_LED** default: `false` — Enable built-in status LED support.
 - **HAS_DISPLAY** default: `false` — Enable display + LVGL UI support.
-- **HAS_ICONS** default: `false` — web-based Image API feature set.
+- **HAS_ICONS** default: `false` — Independent from HAS_IMAGE_API (Image upload/download endpoints remain off).
 - **HAS_IMAGE_API** default: `false` — Enable Image API endpoints (JPEG upload/download/display).
 - **HAS_MQTT** default: `true` — Enable MQTT and Home Assistant integration.
 - **HAS_TOUCH** default: `false` — Enable touch input support.
@@ -163,6 +163,10 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
   - src/app/app.ino
   - src/app/board_config.h
 - **HAS_DISPLAY**
+  - src/app/api_config.cpp
+  - src/app/api_core.cpp
+  - src/app/api_display.cpp
+  - src/app/api_icons.cpp
   - src/app/app.ino
   - src/app/board_config.h
   - src/app/config_manager.cpp
@@ -183,13 +187,13 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
   - src/app/touch_manager.cpp
   - src/app/web_portal.cpp
 - **HAS_ICONS**
+  - src/app/api_icons.cpp
   - src/app/board_config.h
   - src/app/icon_store.cpp
   - src/app/icon_store.h
   - src/app/lv_conf.h
   - src/app/screens/error_screen.cpp
   - src/app/screens/macropad_screen.cpp
-  - src/app/web_portal.cpp
 - **HAS_IMAGE_API**
   - src/app/app.ino
   - src/app/board_config.h
@@ -275,10 +279,12 @@ Legend: ✅ = enabled/true, blank = disabled/false, ? = unknown/undefined
 - **LVGL_TICK_PERIOD_MS**
   - src/app/board_config.h
 - **MEMORY_SNAPSHOT_ON_HTTP_ENABLED**
+  - src/app/api_macros.cpp
   - src/app/board_config.h
   - src/app/display_manager.cpp
   - src/app/mqtt_manager.cpp
   - src/app/web_portal.cpp
+  - src/app/web_portal_pages.cpp
 - **MEMORY_TRIPWIRE_ENABLED**
   - src/app/board_config.h
 - **MEMORY_TRIPWIRE_INTERNAL_MIN_BYTES**
