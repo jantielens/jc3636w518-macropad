@@ -17,7 +17,6 @@ import json
 import os
 import queue
 import random
-import statistics
 import sys
 import time
 from dataclasses import asdict, dataclass
