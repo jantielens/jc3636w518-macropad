@@ -10,6 +10,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <lwip/netif.h>
+#include <time.h>
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <soc/soc_caps.h>
@@ -199,6 +200,9 @@ void setup()
   } else {
     Logger.logMessage("Main", "Config loaded - connecting to WiFi");
     if (connect_wifi()) {
+      // POC: request NTP time sync (UTC). ClockScreen will show placeholders until time becomes valid.
+      configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
+      Logger.logMessage("Time", "NTP sync requested (UTC)");
       start_mdns();
     } else {
       // Hard reset retry - WiFi hardware may be in bad state
@@ -212,6 +216,8 @@ void setup()
 
       // One more attempt after hard reset
       if (connect_wifi()) {
+        configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
+        Logger.logMessage("Time", "NTP sync requested (UTC)");
         start_mdns();
       } else {
         Logger.logMessage("Main", "WiFi failed after reset - fallback to AP");

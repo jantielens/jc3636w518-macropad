@@ -32,6 +32,8 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     infoScreen(cfg, this),
     testScreen(this),
     errorScreen(this),
+    clockScreen(this),
+    analogClockScreen(this),
 #if HAS_IMAGE_API
     directImageScreen(this),
 #endif
@@ -80,6 +82,8 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     }
 
     // Existing utility screens
+    availableScreens[idx++] = {"clock", "Clock", &clockScreen};
+    availableScreens[idx++] = {"analog_clock", "Analog Clock", &analogClockScreen};
     availableScreens[idx++] = {"info", "Info Screen", &infoScreen};
     availableScreens[idx++] = {"test", "Test Screen", &testScreen};
     availableScreens[idx++] = {"error", "Error", &errorScreen};
@@ -119,6 +123,8 @@ DisplayManager::~DisplayManager() {
     infoScreen.destroy();
     testScreen.destroy();
     errorScreen.destroy();
+    clockScreen.destroy();
+    analogClockScreen.destroy();
     
     #if HAS_IMAGE_API
     directImageScreen.destroy();
@@ -457,6 +463,8 @@ void DisplayManager::init() {
     infoScreen.create();
     testScreen.create();
     errorScreen.create();
+    clockScreen.create();
+    analogClockScreen.create();
     #if HAS_IMAGE_API
     #if LV_USE_IMG
     lvglImageScreen.create();

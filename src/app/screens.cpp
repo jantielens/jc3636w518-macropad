@@ -18,6 +18,12 @@
 #include "screens/test_screen.cpp"
 #include "screens/error_screen.cpp"
 
+// POC: Flip clock screen
+#include "screens/clock_screen.cpp"
+
+// POC: Analog Swiss railway clock screen
+#include "screens/analog_clock_screen.cpp"
+
 // Macro pad screens (8 fixed screens)
 #include "screens/macropad_screen.cpp"
 
