@@ -32,6 +32,12 @@
 #define KEY_MQTT_INTERVAL  "mqtt_int"
 #define KEY_BACKLIGHT_BRIGHTNESS "bl_bright"
 
+// Watchlist (3 slots + refresh)
+#define KEY_WATCHLIST_S1 "wl_s1"
+#define KEY_WATCHLIST_S2 "wl_s2"
+#define KEY_WATCHLIST_S3 "wl_s3"
+#define KEY_WATCHLIST_REFRESH "wl_ref"
+
 // Web portal Basic Auth
 #define KEY_BASIC_AUTH_ENABLED "ba_en"
 #define KEY_BASIC_AUTH_USER    "ba_user"
@@ -139,6 +145,12 @@ bool config_manager_load(DeviceConfig *config) {
         config->basic_auth_username[0] = '\0';
         config->basic_auth_password[0] = '\0';
 
+        // Watchlist defaults
+        config->watchlist_slot1[0] = '\0';
+        config->watchlist_slot2[0] = '\0';
+        config->watchlist_slot3[0] = '\0';
+        config->watchlist_refresh_seconds = 60;
+
         #if HAS_DISPLAY
         // Screen saver defaults
         config->screen_saver_enabled = false;
@@ -191,6 +203,12 @@ bool config_manager_load(DeviceConfig *config) {
     config->basic_auth_enabled = preferences.getBool(KEY_BASIC_AUTH_ENABLED, false);
     preferences.getString(KEY_BASIC_AUTH_USER, config->basic_auth_username, CONFIG_BASIC_AUTH_USERNAME_MAX_LEN);
     preferences.getString(KEY_BASIC_AUTH_PASS, config->basic_auth_password, CONFIG_BASIC_AUTH_PASSWORD_MAX_LEN);
+
+    // Load Watchlist settings
+    preferences.getString(KEY_WATCHLIST_S1, config->watchlist_slot1, CONFIG_WATCHLIST_SLOT_MAX_LEN);
+    preferences.getString(KEY_WATCHLIST_S2, config->watchlist_slot2, CONFIG_WATCHLIST_SLOT_MAX_LEN);
+    preferences.getString(KEY_WATCHLIST_S3, config->watchlist_slot3, CONFIG_WATCHLIST_SLOT_MAX_LEN);
+    config->watchlist_refresh_seconds = preferences.getUShort(KEY_WATCHLIST_REFRESH, 60);
 
     #if HAS_DISPLAY
     // Load screen saver settings
@@ -268,6 +286,12 @@ bool config_manager_save(const DeviceConfig *config) {
     preferences.putBool(KEY_BASIC_AUTH_ENABLED, config->basic_auth_enabled);
     preferences.putString(KEY_BASIC_AUTH_USER, config->basic_auth_username);
     preferences.putString(KEY_BASIC_AUTH_PASS, config->basic_auth_password);
+
+    // Save Watchlist settings
+    preferences.putString(KEY_WATCHLIST_S1, config->watchlist_slot1);
+    preferences.putString(KEY_WATCHLIST_S2, config->watchlist_slot2);
+    preferences.putString(KEY_WATCHLIST_S3, config->watchlist_slot3);
+    preferences.putUShort(KEY_WATCHLIST_REFRESH, config->watchlist_refresh_seconds);
 
     #if HAS_DISPLAY
     // Save screen saver settings
@@ -359,4 +383,12 @@ void config_manager_print(const DeviceConfig *config) {
     // MQTT config can still exist in NVS, but the firmware has MQTT support compiled out.
     Logger.logLine("MQTT: disabled (feature not compiled into firmware)");
 #endif
+
+    if (config->watchlist_refresh_seconds > 0) {
+        Logger.logLinef("Watchlist: %ds | [%s] [%s] [%s]",
+            (int)config->watchlist_refresh_seconds,
+            strlen(config->watchlist_slot1) ? config->watchlist_slot1 : "-",
+            strlen(config->watchlist_slot2) ? config->watchlist_slot2 : "-",
+            strlen(config->watchlist_slot3) ? config->watchlist_slot3 : "-");
+    }
 }

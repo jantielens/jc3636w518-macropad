@@ -7,6 +7,7 @@
 #include "screens/screen.h"
 #include "screens/splash_screen.h"
 #include "screens/info_screen.h"
+#include "screens/watchlist_screen.h"
 #include "screens/test_screen.h"
 #include "screens/macropad_screen.h"
 #include "screens/error_screen.h"
@@ -82,6 +83,7 @@ private:
     // Screen instances (created at init, kept in memory)
     SplashScreen splashScreen;
     InfoScreen infoScreen;
+    WatchlistScreen watchlistScreen;
     TestScreen testScreen;
     ErrorScreen errorScreen;
 

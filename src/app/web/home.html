@@ -6,6 +6,37 @@
         {{NAV}}
 
         <form id="config-form">
+            <!-- Watchlist (stocks + crypto) -->
+            <section class="section" id="watchlist-section">
+                <h2>📈 Watchlist</h2>
+
+                <div class="form-group">
+                    <label for="watchlist_refresh_seconds">Refresh Interval (seconds)</label>
+                    <input type="number" id="watchlist_refresh_seconds" name="watchlist_refresh_seconds" min="15" max="3600" placeholder="60">
+                    <small>Default 60s. Clamped to 15–3600 seconds.</small>
+                </div>
+
+                <div class="grid-2col" style="gap: 12px;">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="watchlist_slot1">Slot 1 (Hero)</label>
+                        <input type="text" id="watchlist_slot1" name="watchlist_slot1" maxlength="31" placeholder="MSFT">
+                        <small>Stock by default. Use <code>crypto:BTC</code> for crypto.</small>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="watchlist_slot2">Slot 2</label>
+                        <input type="text" id="watchlist_slot2" name="watchlist_slot2" maxlength="31" placeholder="crypto:BTC">
+                        <small>Empty disables this slot.</small>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label for="watchlist_slot3">Slot 3</label>
+                        <input type="text" id="watchlist_slot3" name="watchlist_slot3" maxlength="31" placeholder="KBC">
+                        <small>Advanced: you can also enter Stooq symbols like <code>MSFT.US</code>.</small>
+                    </div>
+                </div>
+            </section>
+
             <!-- Macro Defaults (global theme for macros) -->
             <section class="section" id="macro-defaults-section">
                 <h2>🌈 Macro Screen Defaults</h2>

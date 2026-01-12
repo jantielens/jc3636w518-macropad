@@ -66,6 +66,12 @@ static void handleGetConfig(AsyncWebServerRequest* request) {
     doc["basic_auth_password"] = "";
     doc["basic_auth_password_set"] = (strlen(current_config->basic_auth_password) > 0);
 
+    // Watchlist
+    doc["watchlist_slot1"] = current_config->watchlist_slot1;
+    doc["watchlist_slot2"] = current_config->watchlist_slot2;
+    doc["watchlist_slot3"] = current_config->watchlist_slot3;
+    doc["watchlist_refresh_seconds"] = current_config->watchlist_refresh_seconds;
+
     // Display settings
     doc["backlight_brightness"] = current_config->backlight_brightness;
 
@@ -234,6 +240,29 @@ static void handlePostConfig(AsyncWebServerRequest* request, uint8_t* data, size
         if (pass && strlen(pass) > 0) {
             strlcpy(current_config->basic_auth_password, pass, CONFIG_BASIC_AUTH_PASSWORD_MAX_LEN);
         }
+    }
+
+    // Watchlist slots
+    if (doc.containsKey("watchlist_slot1")) {
+        strlcpy(current_config->watchlist_slot1, doc["watchlist_slot1"] | "", CONFIG_WATCHLIST_SLOT_MAX_LEN);
+    }
+    if (doc.containsKey("watchlist_slot2")) {
+        strlcpy(current_config->watchlist_slot2, doc["watchlist_slot2"] | "", CONFIG_WATCHLIST_SLOT_MAX_LEN);
+    }
+    if (doc.containsKey("watchlist_slot3")) {
+        strlcpy(current_config->watchlist_slot3, doc["watchlist_slot3"] | "", CONFIG_WATCHLIST_SLOT_MAX_LEN);
+    }
+
+    // Watchlist refresh seconds
+    if (doc.containsKey("watchlist_refresh_seconds")) {
+        if (doc["watchlist_refresh_seconds"].is<const char*>()) {
+            const char* v = doc["watchlist_refresh_seconds"];
+            current_config->watchlist_refresh_seconds = (uint16_t)atoi(v ? v : "60");
+        } else {
+            current_config->watchlist_refresh_seconds = (uint16_t)(doc["watchlist_refresh_seconds"] | 60);
+        }
+        if (current_config->watchlist_refresh_seconds < 15) current_config->watchlist_refresh_seconds = 15;
+        if (current_config->watchlist_refresh_seconds > 3600) current_config->watchlist_refresh_seconds = 3600;
     }
 
     // Display settings - backlight brightness (0-100%)

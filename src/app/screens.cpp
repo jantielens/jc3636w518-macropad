@@ -15,6 +15,7 @@
 // Include all screen implementations
 #include "screens/splash_screen.cpp"
 #include "screens/info_screen.cpp"
+#include "screens/watchlist_screen.cpp"
 #include "screens/test_screen.cpp"
 #include "screens/error_screen.cpp"
 

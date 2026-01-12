@@ -2570,6 +2570,12 @@ async function loadConfig() {
         setValueIfExists('screen_saver_fade_out_ms', config.screen_saver_fade_out_ms);
         setValueIfExists('screen_saver_fade_in_ms', config.screen_saver_fade_in_ms);
         setCheckedIfExists('screen_saver_wake_on_touch', config.screen_saver_wake_on_touch);
+
+        // Watchlist
+        setValueIfExists('watchlist_slot1', config.watchlist_slot1);
+        setValueIfExists('watchlist_slot2', config.watchlist_slot2);
+        setValueIfExists('watchlist_slot3', config.watchlist_slot3);
+        setValueIfExists('watchlist_refresh_seconds', config.watchlist_refresh_seconds);
         
         // Hide loading overlay (silent load)
         const overlay = document.getElementById('form-loading-overlay');
@@ -2611,7 +2617,8 @@ function extractFormFields(formData) {
                     'mqtt_host', 'mqtt_port', 'mqtt_username', 'mqtt_password', 'mqtt_interval_seconds',
                     'basic_auth_enabled', 'basic_auth_username', 'basic_auth_password',
                     'backlight_brightness',
-                    'screen_saver_enabled', 'screen_saver_timeout_seconds', 'screen_saver_fade_out_ms', 'screen_saver_fade_in_ms', 'screen_saver_wake_on_touch'];
+                    'screen_saver_enabled', 'screen_saver_timeout_seconds', 'screen_saver_fade_out_ms', 'screen_saver_fade_in_ms', 'screen_saver_wake_on_touch',
+                    'watchlist_slot1', 'watchlist_slot2', 'watchlist_slot3', 'watchlist_refresh_seconds'];
     
     fields.forEach(field => {
         const element = document.querySelector(`[name="${field}"]`);

@@ -30,6 +30,7 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     previousScreen(nullptr),
     pendingScreen(nullptr),
     infoScreen(cfg, this),
+    watchlistScreen(cfg, this),
     testScreen(this),
     errorScreen(this),
 #if HAS_IMAGE_API
@@ -81,6 +82,7 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
 
     // Existing utility screens
     availableScreens[idx++] = {"info", "Info Screen", &infoScreen};
+    availableScreens[idx++] = {"watchlist", "Watchlist", &watchlistScreen};
     availableScreens[idx++] = {"test", "Test Screen", &testScreen};
     availableScreens[idx++] = {"error", "Error", &errorScreen};
 
@@ -117,6 +119,7 @@ DisplayManager::~DisplayManager() {
         macroScreens[i].destroy();
     }
     infoScreen.destroy();
+    watchlistScreen.destroy();
     testScreen.destroy();
     errorScreen.destroy();
     
@@ -455,6 +458,7 @@ void DisplayManager::init() {
     // Create all screens
     splashScreen.create();
     infoScreen.create();
+    watchlistScreen.create();
     testScreen.create();
     errorScreen.create();
     #if HAS_IMAGE_API

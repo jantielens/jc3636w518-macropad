@@ -109,6 +109,7 @@ void setup()
   device_config.backlight_brightness = 100;  // Default to full brightness
   device_config.mqtt_port = 0;
   device_config.mqtt_interval_seconds = 0;
+  device_config.watchlist_refresh_seconds = 60;
 
   #if HAS_DISPLAY
   // Screen saver defaults (v1)
