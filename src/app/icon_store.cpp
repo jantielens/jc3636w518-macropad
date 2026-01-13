@@ -95,7 +95,24 @@ struct CacheEntry {
     uint32_t last_used_ms;
 };
 
-static CacheEntry g_cache[4];
+// IMPORTANT:
+// LVGL image objects keep a pointer to the provided lv_img_dsc_t (and its data).
+// Evicting/reusing cache slots can invalidate those pointers while the UI is
+// still rendering, causing memory corruption and panics.
+//
+// Therefore: this cache is intentionally non-evicting. If it fills up, we
+// refuse to load more file-backed icons (they simply won't render) rather than
+// risking a crash.
+#ifndef ICON_STORE_CACHE_SLOTS
+    #if SOC_SPIRAM_SUPPORTED
+        // PSRAM-capable targets can afford a bigger icon cache.
+        #define ICON_STORE_CACHE_SLOTS 16
+    #else
+        #define ICON_STORE_CACHE_SLOTS 4
+    #endif
+#endif
+
+static CacheEntry g_cache[ICON_STORE_CACHE_SLOTS];
 
 static void cache_free(CacheEntry& e) {
     if (e.data) {
@@ -122,13 +139,8 @@ static CacheEntry* cache_alloc_slot() {
         if (!e.in_use) return &e;
     }
 
-    // Evict LRU
-    CacheEntry* victim = &g_cache[0];
-    for (auto& e : g_cache) {
-        if (e.last_used_ms < victim->last_used_ms) victim = &e;
-    }
-    cache_free(*victim);
-    return victim;
+    // Non-evicting (see note above).
+    return nullptr;
 }
 
 static bool load_icon_file_to_cache(const char* icon_id, IconRef* out) {
@@ -202,6 +214,10 @@ static bool load_icon_file_to_cache(const char* icon_id, IconRef* out) {
     }
 
     CacheEntry* slot = cache_alloc_slot();
+    if (!slot) {
+        free(payload);
+        return false;
+    }
     cache_free(*slot);
 
     slot->in_use = true;
@@ -357,10 +373,11 @@ bool icon_store_install_blob(const char* icon_id, const uint8_t* blob, size_t bl
         return false;
     }
 
-    // Drop from cache so next lookup reloads cleanly.
-    if (CacheEntry* e = cache_find(icon_id)) {
-        cache_free(*e);
-    }
+    // NOTE: Do not invalidate cached icon descriptors here.
+    // If an icon is currently being rendered, LVGL may still hold a pointer to
+    // the cached lv_img_dsc_t / data. Freeing it can crash the device.
+    // The updated icon will be picked up on next boot (or after an explicit
+    // cache reset, if implemented in the future).
 
     return true;
 }

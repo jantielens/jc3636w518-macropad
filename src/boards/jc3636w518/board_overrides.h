@@ -71,7 +71,11 @@
 // Prefer PSRAM first for LVGL draw buffer (fallback handled in DisplayManager).
 #define LVGL_BUFFER_PREFER_INTERNAL false
 // Prefer PSRAM first for the ESP_Panel ST77916 swap buffer (fallbacks exist).
-#define ESP_PANEL_SWAPBUF_PREFER_INTERNAL false
+// NOTE: The swap buffer is used as the source for QSPI flush DMA operations.
+// PSRAM-backed buffers are not reliably DMA-accessible across cores/IDF versions
+// and can lead to hard-to-debug memory corruption/panics under LVGL rendering.
+// Keep this in internal (DMA-capable) RAM for stability.
+#define ESP_PANEL_SWAPBUF_PREFER_INTERNAL true
 // LVGL draw buffer size in pixels.
 #define LVGL_BUFFER_SIZE (DISPLAY_WIDTH * 16)  // 16 rows (matches sample default)
 

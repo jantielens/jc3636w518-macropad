@@ -8,6 +8,10 @@
 #include "log_manager.h"
 #include <stdarg.h>
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include <esp_rom_sys.h>
+#endif
+
 namespace {
 
 static inline bool serial_ready_for_logging() {
@@ -18,6 +22,21 @@ static inline bool serial_ready_for_logging() {
 #else
     return true;
 #endif
+}
+
+static inline void log_write_line(const char* line) {
+    if (!line) return;
+
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+    // If the USB CDC port isn't open yet, don't drop the log: print to the ROM
+    // console instead (this is where the early boot logs come from).
+    if (!serial_ready_for_logging()) {
+        esp_rom_printf("%s", line);
+        return;
+    }
+#endif
+
+    Serial.print(line);
 }
 
 }
@@ -35,7 +54,14 @@ LogManager::LogManager() {
 
 // Initialize (sets baud rate for Serial)
 void LogManager::begin(unsigned long baud) {
+    // For USB-CDC-on-boot targets (ESP32-S3/C3/C6 with CDCOnBoot=cdc), the core
+    // initializes the CDC interface before `setup()`. Calling Serial.begin()
+    // again can hang or behave poorly when no host is attached.
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+    (void)baud;
+#else
     Serial.begin(baud);
+#endif
 }
 
 // Get indentation string based on nesting level
@@ -54,10 +80,9 @@ const char* LogManager::indent() {
 
 // Begin a log block - atomic write
 void LogManager::logBegin(const char* module) {
-    if (!serial_ready_for_logging()) return;
     char line[128];
     snprintf(line, sizeof(line), "%s[%s] Starting...\n", indent(), module);
-    Serial.print(line);
+    log_write_line(line);
     
     // Save start time if we haven't exceeded max depth
     if (nestLevel < 3) {
@@ -72,15 +97,13 @@ void LogManager::logBegin(const char* module) {
 
 // Add a line to current block - atomic write
 void LogManager::logLine(const char* message) {
-    if (!serial_ready_for_logging()) return;
     char line[160];
     snprintf(line, sizeof(line), "%s%s\n", indent(), message);
-    Serial.print(line);
+    log_write_line(line);
 }
 
 // Add a formatted line (printf-style) - atomic write
 void LogManager::logLinef(const char* format, ...) {
-    if (!serial_ready_for_logging()) return;
     char msgbuf[128];
     va_list args;
     va_start(args, format);
@@ -89,12 +112,11 @@ void LogManager::logLinef(const char* format, ...) {
     
     char line[160];
     snprintf(line, sizeof(line), "%s%s\n", indent(), msgbuf);
-    Serial.print(line);
+    log_write_line(line);
 }
 
 // End a log block - atomic write
 void LogManager::logEnd(const char* message) {
-    if (!serial_ready_for_logging()) return;
     // Decrement nesting level first (but don't underflow)
     if (nestLevel > 0) {
         nestLevel--;
@@ -113,20 +135,18 @@ void LogManager::logEnd(const char* message) {
     const char* msg = (message && strlen(message) > 0) ? message : "Done";
     char line[128];
     snprintf(line, sizeof(line), "%s%s (%lums)\n", indent(), msg, elapsed);
-    Serial.print(line);
+    log_write_line(line);
 }
 
 // Single-line logging with timing - atomic write to prevent interleaving
 void LogManager::logMessage(const char* module, const char* msg) {
-    if (!serial_ready_for_logging()) return;
     unsigned long start = millis();
     char line[192];
     snprintf(line, sizeof(line), "%s[%s] %s (%lums)\n", indent(), module, msg, millis() - start);
-    Serial.print(line);
+    log_write_line(line);
 }
 
 void LogManager::logMessagef(const char* module, const char* format, ...) {
-    if (!serial_ready_for_logging()) return;
     unsigned long start = millis();
     
     char msgbuf[128];
@@ -137,7 +157,7 @@ void LogManager::logMessagef(const char* module, const char* format, ...) {
     
     char line[192];
     snprintf(line, sizeof(line), "%s[%s] %s (%lums)\n", indent(), module, msgbuf, millis() - start);
-    Serial.print(line);
+    log_write_line(line);
 }
 
 // Aliases for logMessage (for backward compatibility)

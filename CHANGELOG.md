@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.3] - 2026-01-13
+
+### Fixed
+- Avoid boot dependency on a connected USB CDC host by skipping `Serial.begin()` when `ARDUINO_USB_CDC_ON_BOOT` is enabled.
+- Restore early boot logs on USB CDC boards by falling back to ROM console output until the CDC port is opened.
+- Mitigate LVGL-related panics on `jc3636w518` by preferring internal (DMA-capable) ESP_Panel swap buffer allocation.
+- Prevent icon cache eviction from invalidating LVGL image descriptors while rendering.
+
 ## [1.4.2] - 2026-01-11
 
 ### Changed
