@@ -3257,6 +3257,72 @@ const healthHistory = {
     wifiRssiTs: [],
 };
 
+const healthSeriesStats = {
+    cpu: { min: null, max: null },
+    heapInternalFree: { min: null, max: null },
+    psramFree: { min: null, max: null },
+    wifiRssi: { min: null, max: null },
+};
+
+function healthComputeMinMaxMulti(arrays) {
+    const list = Array.isArray(arrays) ? arrays : [];
+    let min = Infinity;
+    let max = -Infinity;
+    let seen = false;
+
+    for (let k = 0; k < list.length; k++) {
+        const arr = list[k];
+        if (!Array.isArray(arr) || arr.length < 1) continue;
+        for (let i = 0; i < arr.length; i++) {
+            const v = arr[i];
+            if (typeof v !== 'number' || !isFinite(v)) continue;
+            seen = true;
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+    }
+
+    if (!seen || !isFinite(min) || !isFinite(max)) return { min: null, max: null };
+    return { min, max };
+}
+
+function healthUpdateSeriesStats({ hasPsram = null } = {}) {
+    const resolvedHasPsram = (typeof hasPsram === 'boolean') ? hasPsram : (healthHistory.psramFree && healthHistory.psramFree.length > 0);
+    {
+        const mm = healthComputeMinMaxMulti([healthHistory.cpu]);
+        healthSeriesStats.cpu.min = mm.min;
+        healthSeriesStats.cpu.max = mm.max;
+    }
+    {
+        // Heap sparkline draws both the point series and the window band.
+        const mm = healthComputeMinMaxMulti([
+            healthHistory.heapInternalFree,
+            healthHistory.heapInternalFreeMin,
+            healthHistory.heapInternalFreeMax,
+        ]);
+        healthSeriesStats.heapInternalFree.min = mm.min;
+        healthSeriesStats.heapInternalFree.max = mm.max;
+    }
+    if (resolvedHasPsram) {
+        // PSRAM sparkline draws both the point series and the window band.
+        const mm = healthComputeMinMaxMulti([
+            healthHistory.psramFree,
+            healthHistory.psramFreeMin,
+            healthHistory.psramFreeMax,
+        ]);
+        healthSeriesStats.psramFree.min = mm.min;
+        healthSeriesStats.psramFree.max = mm.max;
+    } else {
+        healthSeriesStats.psramFree.min = null;
+        healthSeriesStats.psramFree.max = null;
+    }
+    {
+        const mm = healthComputeMinMaxMulti([healthHistory.wifiRssi]);
+        healthSeriesStats.wifiRssi.min = mm.min;
+        healthSeriesStats.wifiRssi.max = mm.max;
+    }
+}
+
 function healthConfigureFromDeviceInfo(info) {
     const pollMs = (info && typeof info.health_poll_interval_ms === 'number') ? info.health_poll_interval_ms : HEALTH_POLL_INTERVAL_DEFAULT_MS;
     const windowSeconds = (info && typeof info.health_history_seconds === 'number') ? info.health_history_seconds : HEALTH_HISTORY_DEFAULT_SECONDS;
@@ -3525,11 +3591,16 @@ function healthInitSparklineTooltips() {
         const tsv = ts[i];
         const age = healthFormatAgeMs(Date.now() - tsv);
         const tod = healthFormatTimeOfDay(tsv);
+        const smin = healthSeriesStats.cpu.min;
+        const smax = healthSeriesStats.cpu.max;
+        const srange = (typeof smin === 'number' && typeof smax === 'number') ? `${(smin | 0)}% – ${(smax | 0)}%` : '—';
+        const sdelta = (typeof smin === 'number' && typeof smax === 'number') ? `${Math.max(0, (smax | 0) - (smin | 0))}%` : '—';
         return {
             index: i,
             html: `<div class="health-sparkline-tooltip-title">CPU Usage</div>` +
                 `<div class="health-sparkline-tooltip-row"><span>${tod}</span><span>${age}</span></div>` +
-                `<div class="health-sparkline-tooltip-value">${val}%</div>`,
+                `<div class="health-sparkline-tooltip-value">${val}%</div>` +
+                `<div class="health-sparkline-tooltip-sub">Sparkline min/max: ${srange} (Δ ${sdelta})</div>`,
         };
     });
 
@@ -3550,12 +3621,17 @@ function healthInitSparklineTooltips() {
         const tod = healthFormatTimeOfDay(tsv);
         const range = (typeof wmin === 'number' && typeof wmax === 'number') ? `${healthFormatBytes(wmin)} – ${healthFormatBytes(wmax)}` : '—';
         const delta = (typeof wmin === 'number' && typeof wmax === 'number') ? healthFormatBytes(Math.max(0, wmax - wmin)) : '—';
+        const smin = healthSeriesStats.heapInternalFree.min;
+        const smax = healthSeriesStats.heapInternalFree.max;
+        const srange = (typeof smin === 'number' && typeof smax === 'number') ? `${healthFormatBytes(smin)} – ${healthFormatBytes(smax)}` : '—';
+        const sdelta = (typeof smin === 'number' && typeof smax === 'number') ? healthFormatBytes(Math.max(0, smax - smin)) : '—';
         return {
             index: i,
             html: `<div class="health-sparkline-tooltip-title">Internal Free Heap</div>` +
                 `<div class="health-sparkline-tooltip-row"><span>${tod}</span><span>${age}</span></div>` +
                 `<div class="health-sparkline-tooltip-value">${healthFormatBytes(val)}</div>` +
-            `<div class="health-sparkline-tooltip-sub">Window min/max: ${range} (Δ ${delta})</div>`,
+            `<div class="health-sparkline-tooltip-sub">Window min/max: ${range} (Δ ${delta})</div>` +
+            `<div class="health-sparkline-tooltip-sub">Sparkline min/max: ${srange} (Δ ${sdelta})</div>`,
         };
     });
 
@@ -3576,12 +3652,17 @@ function healthInitSparklineTooltips() {
         const tod = healthFormatTimeOfDay(tsv);
         const range = (typeof wmin === 'number' && typeof wmax === 'number') ? `${healthFormatBytes(wmin)} – ${healthFormatBytes(wmax)}` : '—';
         const delta = (typeof wmin === 'number' && typeof wmax === 'number') ? healthFormatBytes(Math.max(0, wmax - wmin)) : '—';
+        const smin = healthSeriesStats.psramFree.min;
+        const smax = healthSeriesStats.psramFree.max;
+        const srange = (typeof smin === 'number' && typeof smax === 'number') ? `${healthFormatBytes(smin)} – ${healthFormatBytes(smax)}` : '—';
+        const sdelta = (typeof smin === 'number' && typeof smax === 'number') ? healthFormatBytes(Math.max(0, smax - smin)) : '—';
         return {
             index: i,
             html: `<div class="health-sparkline-tooltip-title">PSRAM Free</div>` +
                 `<div class="health-sparkline-tooltip-row"><span>${tod}</span><span>${age}</span></div>` +
                 `<div class="health-sparkline-tooltip-value">${healthFormatBytes(val)}</div>` +
-            `<div class="health-sparkline-tooltip-sub">Window min/max: ${range} (Δ ${delta})</div>`,
+            `<div class="health-sparkline-tooltip-sub">Window min/max: ${range} (Δ ${delta})</div>` +
+            `<div class="health-sparkline-tooltip-sub">Sparkline min/max: ${srange} (Δ ${sdelta})</div>`,
         };
     });
 
@@ -3596,11 +3677,16 @@ function healthInitSparklineTooltips() {
         const tsv = ts[i];
         const age = healthFormatAgeMs(Date.now() - tsv);
         const tod = healthFormatTimeOfDay(tsv);
+        const smin = healthSeriesStats.wifiRssi.min;
+        const smax = healthSeriesStats.wifiRssi.max;
+        const srange = (typeof smin === 'number' && typeof smax === 'number') ? `${(smin | 0)} – ${(smax | 0)} dBm` : '—';
+        const sdelta = (typeof smin === 'number' && typeof smax === 'number') ? `${Math.max(0, (smax | 0) - (smin | 0))} dBm` : '—';
         return {
             index: i,
             html: `<div class="health-sparkline-tooltip-title">WiFi RSSI</div>` +
                 `<div class="health-sparkline-tooltip-row"><span>${tod}</span><span>${age}</span></div>` +
-                `<div class="health-sparkline-tooltip-value">${val} dBm</div>`,
+                `<div class="health-sparkline-tooltip-value">${val} dBm</div>` +
+                `<div class="health-sparkline-tooltip-sub">Sparkline min/max: ${srange} (Δ ${sdelta})</div>`,
         };
     });
 }
@@ -3859,6 +3945,9 @@ async function updateHealth() {
         if (health.wifi_rssi !== null && health.wifi_rssi !== undefined) {
             healthPushSampleWithTs(healthHistory.wifiRssi, healthHistory.wifiRssiTs, health.wifi_rssi, sampleTs);
         }
+
+        // Derived stats used by the sparklines tooltips.
+        healthUpdateSeriesStats({ hasPsram });
         
         // Update compact view
         document.getElementById('health-cpu').textContent = (cpuUsage !== null) ? `CPU ${cpuUsage}%` : 'CPU —';
