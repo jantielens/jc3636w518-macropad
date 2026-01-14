@@ -94,6 +94,7 @@ void web_portal_init(DeviceConfig* config) {
     web_portal_register_api_firmware_routes(*server);
     web_portal_register_api_display_routes(*server);
     web_portal_register_api_ota_routes(*server);
+    web_portal_register_api_spotify_routes(*server);
 
 #if HAS_IMAGE_API && HAS_DISPLAY
     Logger.logMessage("Portal", "Initializing image API");

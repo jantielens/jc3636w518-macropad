@@ -10,6 +10,7 @@
 #include "screens/test_screen.h"
 #include "screens/macropad_screen.h"
 #include "screens/error_screen.h"
+#include "screens/spotify_screen.h"
 #include "macros_config.h"
 
 #if HAS_IMAGE_API
@@ -84,6 +85,7 @@ private:
     InfoScreen infoScreen;
     TestScreen testScreen;
     ErrorScreen errorScreen;
+    SpotifyScreen spotifyScreen;
 
     // Error state (copied in; owned by DisplayManager)
     char errorTitle[48];

@@ -1720,6 +1720,179 @@ function initNavigation() {
     });
 }
 
+// ===== SPOTIFY (POC) =====
+
+const API_SPOTIFY_START = '/api/spotify/auth/start';
+const API_SPOTIFY_COMPLETE = '/api/spotify/auth/complete';
+const API_SPOTIFY_STATUS = '/api/spotify/status';
+const API_SPOTIFY_DISCONNECT = '/api/spotify/disconnect';
+
+let spotifyAuthPopup = null;
+let spotifyLastState = '';
+let spotifyCompleting = false;
+let spotifyLastCompletedKey = '';
+
+async function spotifyFetchStatus() {
+    const statusEl = document.getElementById('spotify_status');
+    if (!statusEl) return;
+
+    try {
+        const resp = await fetch(API_SPOTIFY_STATUS);
+        if (!resp.ok) {
+            statusEl.textContent = `Status: error (${resp.status})`;
+            return;
+        }
+        const data = await resp.json();
+        const connected = !!(data && data.connected);
+        statusEl.textContent = connected ? 'Status: connected' : 'Status: not connected';
+        return connected;
+    } catch (e) {
+        statusEl.textContent = 'Status: error (network)';
+        return false;
+    }
+}
+
+async function spotifyStartAuth() {
+    const statusEl = document.getElementById('spotify_status');
+    if (statusEl) statusEl.textContent = 'Status: starting…';
+
+    const resp = await fetch(API_SPOTIFY_START, { method: 'POST' });
+    if (!resp.ok) {
+        showMessage('Failed to start Spotify auth', 'error');
+        if (statusEl) statusEl.textContent = `Status: error (${resp.status})`;
+        return;
+    }
+
+    const data = await resp.json();
+    if (!data || !data.authorize_url) {
+        showMessage('Spotify auth start returned no URL', 'error');
+        if (statusEl) statusEl.textContent = 'Status: error (no url)';
+        return;
+    }
+
+    spotifyLastState = data.state || '';
+    try { localStorage.setItem('spotify_oauth_state', spotifyLastState); } catch (e) {}
+
+    // Open popup for Spotify authorize.
+    spotifyAuthPopup = window.open(
+        data.authorize_url,
+        'spotify_auth',
+        'width=520,height=720,menubar=no,toolbar=no,location=yes,status=no,scrollbars=yes'
+    );
+
+    if (!spotifyAuthPopup) {
+        showMessage('Popup blocked; use manual completion', 'error');
+        if (statusEl) statusEl.textContent = 'Status: popup blocked';
+        return;
+    }
+
+    if (statusEl) statusEl.textContent = 'Status: waiting for approval…';
+}
+
+async function spotifyCompleteAuth(code, state) {
+    // Best-effort: some query parsers treat '+' as space; OAuth codes should not contain spaces.
+    const normCode = (code || '').replace(/ /g, '+');
+    const normState = (state || '').replace(/ /g, '+');
+    const key = `${normCode}::${normState}`;
+    if (spotifyCompleting) return;
+    if (spotifyLastCompletedKey && spotifyLastCompletedKey === key) return;
+
+    spotifyCompleting = true;
+    spotifyLastCompletedKey = key;
+
+    const statusEl = document.getElementById('spotify_status');
+    if (statusEl) statusEl.textContent = 'Status: completing…';
+
+    try {
+        const resp = await fetch(API_SPOTIFY_COMPLETE, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: normCode, state: normState })
+        });
+
+        if (!resp.ok) {
+            showMessage('Spotify auth complete failed', 'error');
+            if (statusEl) statusEl.textContent = `Status: complete failed (${resp.status})`;
+            return;
+        }
+
+        // Token exchange runs in device main loop, so poll status briefly.
+        const started = Date.now();
+        while (Date.now() - started < 8000) {
+            await new Promise(r => setTimeout(r, 600));
+            const connected = await spotifyFetchStatus();
+            if (connected) {
+                showMessage('Spotify connected', 'success');
+                return;
+            }
+        }
+
+        showMessage('Auth queued; check status in a moment', 'info');
+    } finally {
+        spotifyCompleting = false;
+    }
+}
+
+async function spotifyDisconnect() {
+    const statusEl = document.getElementById('spotify_status');
+    if (statusEl) statusEl.textContent = 'Status: disconnecting…';
+
+    try {
+        const resp = await fetch(API_SPOTIFY_DISCONNECT, { method: 'POST' });
+        if (!resp.ok) {
+            showMessage('Failed to disconnect Spotify', 'error');
+            if (statusEl) statusEl.textContent = `Status: error (${resp.status})`;
+            return;
+        }
+        await spotifyFetchStatus();
+        showMessage('Spotify disconnected', 'success');
+    } catch (e) {
+        showMessage('Failed to disconnect Spotify', 'error');
+    }
+}
+
+function initSpotifyPoc() {
+    const connectBtn = document.getElementById('spotify_connect_btn');
+    const completeBtn = document.getElementById('spotify_complete_btn');
+    const disconnectBtn = document.getElementById('spotify_disconnect_btn');
+
+    if (connectBtn) connectBtn.addEventListener('click', () => spotifyStartAuth());
+    if (disconnectBtn) disconnectBtn.addEventListener('click', () => spotifyDisconnect());
+
+    if (completeBtn) {
+        completeBtn.addEventListener('click', () => {
+            const code = (document.getElementById('spotify_code_input') || {}).value || '';
+            const state = (document.getElementById('spotify_state_input') || {}).value || '';
+            if (!code || !state) {
+                showMessage('Paste both code and state', 'error');
+                return;
+            }
+            spotifyCompleteAuth(code.trim(), state.trim());
+        });
+    }
+
+    // Listen for postMessage from the static callback page.
+    window.addEventListener('message', (event) => {
+        const data = event && event.data;
+        if (!data || typeof data !== 'object') return;
+        if (data.source !== 'spotify-oauth') return;
+
+        const code = data.code || '';
+        const state = data.state || '';
+        if (!code || !state) return;
+
+        // Populate fallback inputs for visibility.
+        const codeEl = document.getElementById('spotify_code_input');
+        const stateEl = document.getElementById('spotify_state_input');
+        if (codeEl) codeEl.value = code;
+        if (stateEl) stateEl.value = state;
+
+        spotifyCompleteAuth(code, state);
+    });
+
+    spotifyFetchStatus();
+}
+
 /**
  * Display a message to the user
  * @param {string} message - Message text
@@ -3225,6 +3398,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (currentPage === 'home') {
         initMacrosEditor();
+        initSpotifyPoc();
     }
     
     // Initialize health widget

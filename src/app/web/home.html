@@ -30,6 +30,40 @@
                 <small style="margin-top: 10px;">Defaults apply when per-screen/per-button overrides are not enabled.</small>
             </section>
 
+            <!-- Spotify POC -->
+            <section class="section" id="spotify-section">
+                <h2>🎵 Spotify (POC)</h2>
+
+                <div class="grid-2col" style="gap: 12px; align-items: start;">
+                    <div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label>Connection</label>
+                            <div style="display:flex; gap: 10px; flex-wrap: wrap;">
+                                <button type="button" class="btn btn-primary" id="spotify_connect_btn">Connect Spotify</button>
+                                <button type="button" class="btn btn-secondary" id="spotify_disconnect_btn">Disconnect</button>
+                            </div>
+                            <small id="spotify_status" style="display:block; margin-top: 8px;">Status: —</small>
+                        </div>
+
+                        <small style="display:block; margin-top: 10px;">
+                            This uses a popup + a hosted static callback page. If popups are blocked, use the manual paste flow.
+                        </small>
+                    </div>
+
+                    <div>
+                        <div class="form-group" style="margin-bottom: 0;">
+                            <label>Manual completion (fallback)</label>
+                            <input type="text" id="spotify_code_input" placeholder="Paste code" autocomplete="off" spellcheck="false">
+                            <input type="text" id="spotify_state_input" placeholder="Paste state" autocomplete="off" spellcheck="false" style="margin-top: 8px;">
+                            <div style="display:flex; gap: 10px; flex-wrap: wrap; margin-top: 10px;">
+                                <button type="button" class="btn btn-secondary" id="spotify_complete_btn">Complete auth</button>
+                            </div>
+                            <small style="display:block; margin-top: 8px;">Use the values shown on the callback page.</small>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- Macros Editor -->
             <section class="section" id="macros-section">
                 <h2>⌨️ Macros</h2>

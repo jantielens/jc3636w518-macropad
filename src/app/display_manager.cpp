@@ -32,6 +32,7 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     infoScreen(cfg, this),
     testScreen(this),
     errorScreen(this),
+    spotifyScreen(),
 #if HAS_IMAGE_API
     directImageScreen(this),
 #endif
@@ -82,6 +83,7 @@ DisplayManager::DisplayManager(DeviceConfig* cfg)
     // Existing utility screens
     availableScreens[idx++] = {"info", "Info Screen", &infoScreen};
     availableScreens[idx++] = {"test", "Test Screen", &testScreen};
+    availableScreens[idx++] = {"spotify", "Spotify", &spotifyScreen};
     availableScreens[idx++] = {"error", "Error", &errorScreen};
 
     #if HAS_IMAGE_API
@@ -118,6 +120,7 @@ DisplayManager::~DisplayManager() {
     }
     infoScreen.destroy();
     testScreen.destroy();
+    spotifyScreen.destroy();
     errorScreen.destroy();
     
     #if HAS_IMAGE_API
@@ -457,6 +460,7 @@ void DisplayManager::init() {
     infoScreen.create();
     testScreen.create();
     errorScreen.create();
+    spotifyScreen.create();
     #if HAS_IMAGE_API
     #if LV_USE_IMG
     lvglImageScreen.create();

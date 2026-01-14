@@ -1,6 +1,6 @@
 #include "board_config.h"
 
-#if HAS_DISPLAY && HAS_IMAGE_API
+#if HAS_DISPLAY
 
 #include "lvgl_jpeg_decoder.h"
 
@@ -251,4 +251,4 @@ bool lvgl_jpeg_decode_to_rgb565(
 
 #endif // LV_USE_IMG
 
-#endif // HAS_DISPLAY && HAS_IMAGE_API
+#endif // HAS_DISPLAY

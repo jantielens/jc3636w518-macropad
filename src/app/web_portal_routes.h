@@ -12,5 +12,6 @@ void web_portal_register_api_icons_routes(AsyncWebServer& server);
 void web_portal_register_api_firmware_routes(AsyncWebServer& server);
 void web_portal_register_api_display_routes(AsyncWebServer& server);
 void web_portal_register_api_ota_routes(AsyncWebServer& server);
+void web_portal_register_api_spotify_routes(AsyncWebServer& server);
 
 void web_portal_macros_preload();

@@ -7,6 +7,7 @@
 #include "device_telemetry.h"
 #include "ble_keyboard_manager.h"
 #include "macros_config.h"
+#include "spotify_manager.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <lwip/netif.h>
@@ -145,6 +146,9 @@ void setup()
   #endif
   config_manager_init();
 
+  // Spotify POC manager (OAuth + polling in main loop)
+  spotify_manager::init();
+
   // Cache flash/sketch metadata early to avoid concurrent access from different tasks later
   // (e.g., MQTT publish + web API calls).
   device_telemetry_init();
@@ -270,6 +274,9 @@ void loop()
 
   // Handle web portal (DNS for captive portal)
   web_portal_handle();
+
+  // Spotify POC loop (token exchange / now-playing polling)
+  spotify_manager::loop();
 
   #if HAS_IMAGE_API
   // Process pending image uploads (deferred decoding)

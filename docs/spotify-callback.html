@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Spotify Callback</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:24px;background:#0b0f19;color:#e5e7eb}
+    .card{max-width:720px;margin:0 auto;background:#111827;border:1px solid #243244;border-radius:12px;padding:16px}
+    h1{margin:0 0 12px 0;font-size:18px}
+    .muted{color:#9ca3af;font-size:13px}
+    code{background:#0b1220;padding:2px 6px;border-radius:6px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+    button{background:#2563eb;border:0;color:white;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+    button.secondary{background:#374151}
+    input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid #374151;background:#0b1220;color:#e5e7eb}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Spotify authorization</h1>
+    <p class="muted" id="status">Completing…</p>
+
+    <div id="fallback" style="display:none;">
+      <p class="muted">If this tab didn’t close automatically, copy these values into the device portal:</p>
+      <div style="margin-top:10px;">
+        <label class="muted">Code</label>
+        <input id="code" readonly />
+      </div>
+      <div style="margin-top:10px;">
+        <label class="muted">State</label>
+        <input id="state" readonly />
+      </div>
+      <div class="row">
+        <button id="copy">Copy code + state</button>
+        <button class="secondary" id="close">Close</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  // URLSearchParams uses x-www-form-urlencoded parsing (treats '+' as space).
+  // OAuth codes can legally contain '+', so preserve them.
+  const qs = new URLSearchParams((location.search || '').replace(/\+/g, '%2B'));
+  const code = qs.get('code') || '';
+  const state = qs.get('state') || '';
+  const err = qs.get('error') || '';
+
+  const status = document.getElementById('status');
+  const fallback = document.getElementById('fallback');
+  const codeEl = document.getElementById('code');
+  const stateEl = document.getElementById('state');
+
+  if (err) {
+    status.textContent = 'Spotify returned an error: ' + err;
+    fallback.style.display = 'block';
+    codeEl.value = code;
+    stateEl.value = state;
+    return;
+  }
+
+  if (!code || !state) {
+    status.textContent = 'Missing code/state in callback URL.';
+    fallback.style.display = 'block';
+    codeEl.value = code;
+    stateEl.value = state;
+    return;
+  }
+
+  // Best effort: send to opener (portal tab)
+  let sent = false;
+  try {
+    if (window.opener && typeof window.opener.postMessage === 'function') {
+      window.opener.postMessage({ source: 'spotify-oauth', code, state }, '*');
+      sent = true;
+    }
+  } catch (e) {}
+
+  // Clean up URL so code isn't in history
+  try { history.replaceState({}, document.title, location.pathname); } catch (e) {}
+
+  if (sent) {
+    status.textContent = 'Done. You can close this window.';
+    setTimeout(() => window.close(), 250);
+    // If close fails (mobile), show fallback.
+    setTimeout(() => {
+      fallback.style.display = 'block';
+      codeEl.value = code;
+      stateEl.value = state;
+    }, 700);
+  } else {
+    status.textContent = 'Please copy code + state into the device portal.';
+    fallback.style.display = 'block';
+    codeEl.value = code;
+    stateEl.value = state;
+  }
+
+  document.getElementById('copy').addEventListener('click', async () => {
+    const text = `code=${code}\nstate=${state}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      status.textContent = 'Copied.';
+    } catch (e) {
+      status.textContent = 'Copy failed (clipboard not available).';
+    }
+  });
+
+  document.getElementById('close').addEventListener('click', () => window.close());
+})();
+</script>
+</body>
+</html>

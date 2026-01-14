@@ -2,7 +2,10 @@
 
 #include "board_config.h"
 
-#if HAS_DISPLAY && HAS_IMAGE_API
+// This decoder is used by multiple features (e.g. Image API and Spotify album art).
+// Keep it independent from HAS_IMAGE_API so display-enabled boards can opt-in to
+// other image features without enabling the web Image API endpoints.
+#if HAS_DISPLAY
 
 #include <lvgl.h>
 
@@ -29,4 +32,4 @@ bool lvgl_jpeg_decode_to_rgb565(
 
 #endif // LV_USE_IMG
 
-#endif // HAS_DISPLAY && HAS_IMAGE_API
+#endif // HAS_DISPLAY
