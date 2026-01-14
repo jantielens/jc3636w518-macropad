@@ -152,6 +152,9 @@ void setup()
   // Start CPU monitoring background task
   device_telemetry_start_cpu_monitoring();
 
+  // Start /api/health window min/max sampler (captures short dips between polls)
+  device_telemetry_start_health_window_sampling();
+
   // Try to load saved configuration
   #if HAS_DISPLAY
   display_manager_set_splash_status("Reading config...");

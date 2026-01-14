@@ -85,6 +85,18 @@
 #define HEARTBEAT_INTERVAL_MS 60000UL
 #endif
 
+// Web portal health polling cadence (client-side only).
+// Used by the portal to determine how often to poll /api/health and how many
+// samples to keep in its in-browser history buffers.
+#ifndef HEALTH_POLL_INTERVAL_MS
+#define HEALTH_POLL_INTERVAL_MS 5000UL
+#endif
+
+// Web portal health history window in seconds (client-side only).
+#ifndef HEALTH_HISTORY_SECONDS
+#define HEALTH_HISTORY_SECONDS 300UL
+#endif
+
 // When enabled, log memory snapshots from key runtime hotspots.
 // Originally added for HTTP handlers, but also used for other one-shot hotspot tags
 // (e.g. MQTT connect/discovery, macro apply, LVGL screen switch) so automated

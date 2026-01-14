@@ -29,8 +29,6 @@ void ha_discovery_publish_health(MqttManager &mqtt) {
     publish_sensor_config(mqtt, "reset_reason", "Reset Reason", "{{ value_json.reset_reason }}", "", "", "", "diagnostic");
 
     publish_sensor_config(mqtt, "cpu_usage", "CPU Usage", "{{ value_json.cpu_usage }}", "%", "", "measurement", "diagnostic");
-    publish_sensor_config(mqtt, "cpu_usage_min", "CPU Usage Min", "{{ value_json.cpu_usage_min }}", "%", "", "measurement", "diagnostic");
-    publish_sensor_config(mqtt, "cpu_usage_max", "CPU Usage Max", "{{ value_json.cpu_usage_max }}", "%", "", "measurement", "diagnostic");
     publish_sensor_config(mqtt, "cpu_temperature", "Core Temp", "{{ value_json.cpu_temperature }}", "°C", "temperature", "measurement", "diagnostic");
 
     publish_sensor_config(mqtt, "heap_free", "Free Heap", "{{ value_json.heap_free }}", "B", "", "measurement", "diagnostic");

@@ -408,10 +408,8 @@ Returns real-time device health statistics.
   "uptime_seconds": 3600,
   "reset_reason": "Power On",
   "cpu_usage": 15,
-  "cpu_usage_min": 8,
-  "cpu_usage_max": 32,
   "cpu_freq": 160,
-  "temperature": 42,
+  "cpu_temperature": 42,
   "heap_free": 250000,
   "heap_min": 240000,
   "heap_size": 327680,
@@ -426,8 +424,7 @@ Returns real-time device health statistics.
 ```
 
 **Notes:**
-- `cpu_usage_min`, `cpu_usage_max`: Minimum and maximum CPU usage over the last 60 seconds
-- `temperature`: `null` on chips without internal sensor (original ESP32)
+- `cpu_temperature`: `null` on chips without internal sensor (original ESP32)
 - `wifi_rssi`, `wifi_channel`, `ip_address`, `hostname`: `null` when not connected
 
 ### Configuration Management

@@ -1122,6 +1122,8 @@ body.portal-overlay-open {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
     min-width: 280px;
     border: 2px solid #d0e7ff;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
 }
 
 .health-header {
@@ -1166,6 +1168,67 @@ body.portal-overlay-open {
     display: flex;
     flex-direction: column;
     gap: 4px;
+}
+
+.health-sparkline {
+    background: rgba(255, 255, 255, 0.75);
+    border: 1px solid #d0e7ff;
+    border-radius: 12px;
+    padding: 10px;
+    margin-bottom: 6px;
+}
+
+.health-sparkline-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+}
+
+.health-sparkline canvas {
+    width: 100%;
+    height: 44px;
+    display: block;
+    cursor: crosshair;
+}
+
+.health-sparkline-tooltip {
+    position: fixed;
+    z-index: 2500;
+    pointer-events: none;
+    background: rgba(17, 24, 39, 0.92);
+    color: rgba(255, 255, 255, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    padding: 10px 12px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+    font-size: 12px;
+    line-height: 1.25;
+    max-width: 320px;
+    backdrop-filter: blur(8px);
+}
+
+.health-sparkline-tooltip-title {
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.health-sparkline-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    opacity: 0.85;
+    margin-bottom: 6px;
+}
+
+.health-sparkline-tooltip-value {
+    font-weight: 800;
+    font-size: 13px;
+}
+
+.health-sparkline-tooltip-sub {
+    margin-top: 4px;
+    opacity: 0.85;
 }
 
 .health-stat {

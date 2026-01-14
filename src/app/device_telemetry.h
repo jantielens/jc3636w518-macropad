@@ -33,12 +33,14 @@ void device_telemetry_fill_mqtt(JsonDocument &doc);
 // Thread-safe - reads cached value updated by background task.
 int device_telemetry_get_cpu_usage();
 
-// Get CPU usage min/max over the last 60 seconds.
-void device_telemetry_get_cpu_minmax(int* out_min, int* out_max);
-
 // Initialize CPU monitoring background task.
 // Must be called once during setup.
 void device_telemetry_start_cpu_monitoring();
+
+// Start background sampling for /api/health window min/max metrics.
+// Tracks min/max between /api/health calls and resets when /api/health is served.
+// Safe to call multiple times.
+void device_telemetry_start_health_window_sampling();
 
 // Capture a point-in-time memory snapshot (heap/internal heap/PSRAM).
 DeviceMemorySnapshot device_telemetry_get_memory_snapshot();

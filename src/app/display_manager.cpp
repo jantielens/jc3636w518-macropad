@@ -20,6 +20,45 @@
 
 #include <SPI.h>
 
+namespace {
+static portMUX_TYPE g_perf_mux = portMUX_INITIALIZER_UNLOCKED;
+static DisplayPerfStats g_perf = {0, 0, 0};
+static uint32_t g_perf_window_start_ms = 0;
+static uint16_t g_perf_window_frames = 0;
+
+static void perf_update_lv_timer_us(uint32_t us) {
+    portENTER_CRITICAL(&g_perf_mux);
+    g_perf.lv_timer_us = us;
+    portEXIT_CRITICAL(&g_perf_mux);
+}
+
+static void perf_update_present_us(uint32_t us) {
+    portENTER_CRITICAL(&g_perf_mux);
+    g_perf.present_us = us;
+    portEXIT_CRITICAL(&g_perf_mux);
+}
+
+static void perf_mark_frame() {
+    const uint32_t now = millis();
+
+    portENTER_CRITICAL(&g_perf_mux);
+    if (g_perf_window_start_ms == 0) {
+        g_perf_window_start_ms = now;
+        g_perf_window_frames = 0;
+    }
+
+    g_perf_window_frames++;
+    const uint32_t elapsed = now - g_perf_window_start_ms;
+    if (elapsed >= 1000) {
+        // Simple, low-cost FPS estimate.
+        g_perf.fps = g_perf_window_frames;
+        g_perf_window_start_ms = now;
+        g_perf_window_frames = 0;
+    }
+    portEXIT_CRITICAL(&g_perf_mux);
+}
+} // namespace
+
 // Global instance
 DisplayManager* displayManager = nullptr;
 
@@ -325,7 +364,10 @@ void DisplayManager::lvglTask(void* pvParameter) {
         }
         
         // Handle LVGL rendering (animations, timers, etc.)
+        const uint32_t t0 = micros();
         uint32_t delayMs = lv_timer_handler();
+        const uint32_t t1 = micros();
+        perf_update_lv_timer_us(t1 - t0);
         
         // Update current screen (data refresh)
         if (mgr->currentScreen) {
@@ -334,8 +376,13 @@ void DisplayManager::lvglTask(void* pvParameter) {
         
         // Flush canvas buffer only when LVGL produced draw data.
         if (mgr->flushPending) {
+            // One 'frame' per rendered cycle (even if multiple flush callbacks happened).
+            perf_mark_frame();
             if (mgr->driver->renderMode() == DisplayDriver::RenderMode::Buffered) {
+                const uint32_t p0 = micros();
                 mgr->driver->present();
+                const uint32_t p1 = micros();
+                perf_update_present_us(p1 - p0);
             }
             mgr->flushPending = false;
         }
@@ -348,6 +395,14 @@ void DisplayManager::lvglTask(void* pvParameter) {
         if (delayMs > 20) delayMs = 20;
         vTaskDelay(pdMS_TO_TICKS(delayMs));
     }
+}
+
+bool display_manager_get_perf_stats(DisplayPerfStats* out) {
+    if (!out) return false;
+    portENTER_CRITICAL(&g_perf_mux);
+    *out = g_perf;
+    portEXIT_CRITICAL(&g_perf_mux);
+    return true;
 }
 
 void DisplayManager::initHardware() {

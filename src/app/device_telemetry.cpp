@@ -3,6 +3,16 @@
 #include "board_config.h"
 #include "log_manager.h"
 
+#include "fs_health.h"
+
+#if HAS_MQTT
+#include "mqtt_manager.h"
+#endif
+
+#if HAS_DISPLAY
+#include "display_manager.h"
+#endif
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include "soc/soc_caps.h"
@@ -10,18 +20,16 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <freertos/timers.h>
 
 // Temperature sensor support (ESP32-C3, ESP32-S2, ESP32-S3, ESP32-C2, ESP32-C6, ESP32-H2)
 #if SOC_TEMP_SENSOR_SUPPORTED
 #include "driver/temperature_sensor.h"
 #endif
 
-// CPU usage tracking (task-based with min/max over 60s window)
+// CPU usage tracking (task-based)
 static SemaphoreHandle_t cpu_mutex = nullptr;
 static int cpu_usage_current = 0;
-static int cpu_usage_min = 100;
-static int cpu_usage_max = 0;
-static unsigned long last_minmax_reset = 0;
 static TaskHandle_t cpu_task_handle = nullptr;
 
 // Delta tracking for calculation
@@ -29,7 +37,14 @@ static uint32_t last_idle_runtime = 0;
 static uint32_t last_total_runtime = 0;
 static bool first_calculation = true;
 
-#define CPU_MINMAX_WINDOW_SECONDS 60
+static bool log_every_ms(unsigned long now_ms, unsigned long *last_ms, unsigned long interval_ms) {
+    if (!last_ms) return false;
+    if (*last_ms == 0 || (now_ms - *last_ms) >= interval_ms) {
+        *last_ms = now_ms;
+        return true;
+    }
+    return false;
+}
 
 // Flash/sketch metadata caching (avoid re-entrant ESP-IDF image/mmap helpers)
 static bool flash_cache_initialized = false;
@@ -48,6 +63,150 @@ static void get_memory_snapshot(
     size_t *out_psram_min,
     size_t *out_psram_largest
 );
+
+// /api/health min/max window sampling (reset on /api/health).
+// Goal: capture short-lived dips/spikes between HTTP polls without storing
+// time series on-device.
+namespace {
+static portMUX_TYPE g_health_window_mux = portMUX_INITIALIZER_UNLOCKED;
+static TimerHandle_t g_health_window_timer = nullptr;
+static constexpr uint32_t kHealthWindowSamplePeriodMs = 200;
+
+struct HealthWindowStats {
+    bool initialized;
+
+    size_t internal_free_min;
+    size_t internal_free_max;
+    size_t internal_largest_min;
+    int internal_frag_max;
+
+    size_t psram_free_min;
+    size_t psram_free_max;
+    size_t psram_largest_min;
+    int psram_frag_max;
+};
+
+static HealthWindowStats g_health_window = {};
+
+static int compute_fragmentation_percent(size_t free_bytes, size_t largest_bytes) {
+    if (free_bytes == 0) return 0;
+    if (largest_bytes > free_bytes) return 0;
+    float frag = (1.0f - ((float)largest_bytes / (float)free_bytes)) * 100.0f;
+    if (frag < 0) frag = 0;
+    if (frag > 100) frag = 100;
+    return (int)frag;
+}
+
+static void health_window_update_sample(size_t internal_free, size_t internal_largest, size_t psram_free, size_t psram_largest) {
+    const int internal_frag = compute_fragmentation_percent(internal_free, internal_largest);
+    const int psram_frag = compute_fragmentation_percent(psram_free, psram_largest);
+
+    portENTER_CRITICAL(&g_health_window_mux);
+
+    if (!g_health_window.initialized) {
+        g_health_window.initialized = true;
+
+        g_health_window.internal_free_min = internal_free;
+        g_health_window.internal_free_max = internal_free;
+        g_health_window.internal_largest_min = internal_largest;
+        g_health_window.internal_frag_max = internal_frag;
+
+        g_health_window.psram_free_min = psram_free;
+        g_health_window.psram_free_max = psram_free;
+        g_health_window.psram_largest_min = psram_largest;
+        g_health_window.psram_frag_max = psram_frag;
+
+        portEXIT_CRITICAL(&g_health_window_mux);
+        return;
+    }
+
+    if (internal_free < g_health_window.internal_free_min) g_health_window.internal_free_min = internal_free;
+    if (internal_free > g_health_window.internal_free_max) g_health_window.internal_free_max = internal_free;
+    if (internal_largest < g_health_window.internal_largest_min) g_health_window.internal_largest_min = internal_largest;
+    if (internal_frag > g_health_window.internal_frag_max) g_health_window.internal_frag_max = internal_frag;
+
+    if (psram_free < g_health_window.psram_free_min) g_health_window.psram_free_min = psram_free;
+    if (psram_free > g_health_window.psram_free_max) g_health_window.psram_free_max = psram_free;
+    if (psram_largest < g_health_window.psram_largest_min) g_health_window.psram_largest_min = psram_largest;
+    if (psram_frag > g_health_window.psram_frag_max) g_health_window.psram_frag_max = psram_frag;
+
+    portEXIT_CRITICAL(&g_health_window_mux);
+}
+
+static void health_window_timer_cb(TimerHandle_t) {
+    size_t heap_free = 0;
+    size_t heap_min = 0;
+    size_t heap_largest = 0;
+    size_t internal_free = 0;
+    size_t internal_min = 0;
+    size_t psram_free = 0;
+    size_t psram_min = 0;
+    size_t psram_largest = 0;
+
+    get_memory_snapshot(
+        &heap_free,
+        &heap_min,
+        &heap_largest,
+        &internal_free,
+        &internal_min,
+        &psram_free,
+        &psram_min,
+        &psram_largest
+    );
+
+    // heap_largest is computed as INTERNAL largest free block (see get_memory_snapshot).
+    health_window_update_sample(internal_free, heap_largest, psram_free, psram_largest);
+}
+
+static HealthWindowStats health_window_get_and_reset(size_t internal_free_now, size_t internal_largest_now, size_t psram_free_now, size_t psram_largest_now) {
+    const int internal_frag_now = compute_fragmentation_percent(internal_free_now, internal_largest_now);
+    const int psram_frag_now = compute_fragmentation_percent(psram_free_now, psram_largest_now);
+
+    HealthWindowStats snap;
+
+    portENTER_CRITICAL(&g_health_window_mux);
+
+    // Ensure the current point-in-time values are included in the window we return.
+    if (!g_health_window.initialized) {
+        g_health_window.initialized = true;
+        g_health_window.internal_free_min = internal_free_now;
+        g_health_window.internal_free_max = internal_free_now;
+        g_health_window.internal_largest_min = internal_largest_now;
+        g_health_window.internal_frag_max = internal_frag_now;
+        g_health_window.psram_free_min = psram_free_now;
+        g_health_window.psram_free_max = psram_free_now;
+        g_health_window.psram_largest_min = psram_largest_now;
+        g_health_window.psram_frag_max = psram_frag_now;
+    } else {
+        if (internal_free_now < g_health_window.internal_free_min) g_health_window.internal_free_min = internal_free_now;
+        if (internal_free_now > g_health_window.internal_free_max) g_health_window.internal_free_max = internal_free_now;
+        if (internal_largest_now < g_health_window.internal_largest_min) g_health_window.internal_largest_min = internal_largest_now;
+        if (internal_frag_now > g_health_window.internal_frag_max) g_health_window.internal_frag_max = internal_frag_now;
+
+        if (psram_free_now < g_health_window.psram_free_min) g_health_window.psram_free_min = psram_free_now;
+        if (psram_free_now > g_health_window.psram_free_max) g_health_window.psram_free_max = psram_free_now;
+        if (psram_largest_now < g_health_window.psram_largest_min) g_health_window.psram_largest_min = psram_largest_now;
+        if (psram_frag_now > g_health_window.psram_frag_max) g_health_window.psram_frag_max = psram_frag_now;
+    }
+
+    snap = g_health_window;
+
+    // Reset the window and immediately seed the next window with the current values.
+    g_health_window = {};
+    g_health_window.initialized = true;
+    g_health_window.internal_free_min = internal_free_now;
+    g_health_window.internal_free_max = internal_free_now;
+    g_health_window.internal_largest_min = internal_largest_now;
+    g_health_window.internal_frag_max = internal_frag_now;
+    g_health_window.psram_free_min = psram_free_now;
+    g_health_window.psram_free_max = psram_free_now;
+    g_health_window.psram_largest_min = psram_largest_now;
+    g_health_window.psram_frag_max = psram_frag_now;
+
+    portEXIT_CRITICAL(&g_health_window_mux);
+    return snap;
+}
+} // namespace
 
 // One-shot tripwire state (per boot).
 static bool g_low_mem_tripwire_fired = false;
@@ -96,13 +255,7 @@ void device_telemetry_log_memory_snapshot(const char *tag) {
     // pf=psram_free pm=psram_min pl=psram_largest
     // frag=heap fragmentation percent (based on hl/hf)
 
-    unsigned frag_percent = 0;
-    if (heap_free > 0) {
-        float fragmentation = (1.0f - ((float)heap_largest / (float)heap_free)) * 100.0f;
-        if (fragmentation < 0) fragmentation = 0;
-        if (fragmentation > 100) fragmentation = 100;
-        frag_percent = (unsigned)fragmentation;
-    }
+    const unsigned frag_percent = (unsigned)compute_fragmentation_percent(heap_free, heap_largest);
 
     Logger.logMessagef(
         "Mem",
@@ -213,6 +366,8 @@ void device_telemetry_dump_task_stack_watermarks(const char *tag) {
 }
 
 void device_telemetry_fill_api(JsonDocument &doc) {
+    // Web portal /api/health payload
+    // - include IP/channel and debug fields
     fill_common(doc, true, true);
 
     // =====================================================================
@@ -233,6 +388,7 @@ void device_telemetry_fill_api(JsonDocument &doc) {
 }
 
 void device_telemetry_fill_mqtt(JsonDocument &doc) {
+    // MQTT payload
     fill_common(doc, false, false);
 
     // =====================================================================
@@ -262,6 +418,26 @@ void device_telemetry_init() {
     flash_cache_initialized = true;
 }
 
+void device_telemetry_start_health_window_sampling() {
+    if (g_health_window_timer != nullptr) return;
+
+    // FreeRTOS timer runs on the timer service task. This avoids adding a new task.
+    g_health_window_timer = xTimerCreate(
+        "health_win",
+        pdMS_TO_TICKS(kHealthWindowSamplePeriodMs),
+        pdTRUE,
+        nullptr,
+        health_window_timer_cb
+    );
+    if (g_health_window_timer == nullptr) {
+        Logger.logMessage("HealthWin", "Failed to create sampler timer");
+        return;
+    }
+    if (xTimerStart(g_health_window_timer, 0) != pdPASS) {
+        Logger.logMessage("HealthWin", "Failed to start sampler timer");
+    }
+}
+
 size_t device_telemetry_sketch_size() {
     if (!flash_cache_initialized) {
         device_telemetry_init();
@@ -278,9 +454,45 @@ size_t device_telemetry_free_sketch_space() {
 
 // Internal: Calculate CPU usage from IDLE task runtime
 static int calculate_cpu_usage() {
-    TaskStatus_t task_stats[16];
-    uint32_t total_runtime;
-    int task_count = uxTaskGetSystemState(task_stats, 16, &total_runtime);
+    // IMPORTANT:
+    // - uxTaskGetSystemState returns 0 when the provided array is too small.
+    // - TaskStatus_t is fairly large; keep this out of stack (CPU monitor task stack is small).
+    // - If runtime stats aren't enabled, total_runtime and ulRunTimeCounter stay 0 -> treat as unknown.
+    constexpr UBaseType_t kMaxTasks = 24;
+    static TaskStatus_t task_stats[kMaxTasks];
+
+    // Guard: if there are more tasks than we can sample, bail out and log.
+    // This keeps the static array size fixed (no extra RAM), while making truncation visible.
+    static unsigned long last_truncation_log_ms = 0;
+    const unsigned long now_ms = millis();
+    const UBaseType_t expected_tasks = uxTaskGetNumberOfTasks();
+    if (expected_tasks > kMaxTasks) {
+        if (log_every_ms(now_ms, &last_truncation_log_ms, 5000)) {
+            Logger.logQuickf(
+                "CPU",
+                "Runtime stats truncated: tasks=%u > max=%u (cpu_usage unavailable)",
+                (unsigned)expected_tasks,
+                (unsigned)kMaxTasks
+            );
+        }
+        return -1;
+    }
+
+    uint32_t total_runtime = 0;
+    const int task_count = uxTaskGetSystemState(task_stats, kMaxTasks, &total_runtime);
+
+    static unsigned long last_runtime_stats_log_ms = 0;
+    if (task_count <= 0 || total_runtime == 0) {
+        if (log_every_ms(now_ms, &last_runtime_stats_log_ms, 5000)) {
+            Logger.logQuickf(
+                "CPU",
+                "Runtime stats unavailable: uxTaskGetSystemState=%d total_runtime=%lu",
+                task_count,
+                (unsigned long)total_runtime
+            );
+        }
+        return -1;
+    }
 
     // Count IDLE tasks and sum their runtimes
     uint32_t idle_runtime = 0;
@@ -292,12 +504,14 @@ static int calculate_cpu_usage() {
         }
     }
 
+    if (idle_task_count <= 0) return -1;
+
     // Skip first calculation (need delta)
     if (first_calculation) {
         last_idle_runtime = idle_runtime;
         last_total_runtime = total_runtime;
         first_calculation = false;
-        return 0;
+        return -1;
     }
 
     // Calculate delta
@@ -307,7 +521,7 @@ static int calculate_cpu_usage() {
     last_idle_runtime = idle_runtime;
     last_total_runtime = total_runtime;
 
-    if (total_delta == 0) return 0;
+    if (total_delta == 0) return -1;
 
     // FreeRTOS uxTaskGetSystemState:
     // - total_runtime = elapsed wall-clock time (in timer ticks) since boot
@@ -320,7 +534,7 @@ static int calculate_cpu_usage() {
     //
     // CPU usage = 100 - (idle_time / max_possible_idle_time * 100)
     uint32_t max_idle_time = total_delta * idle_task_count;
-    if (max_idle_time == 0) return 0;
+    if (max_idle_time == 0) return -1;
     
     float idle_percent = ((float)idle_delta / max_idle_time) * 100.0f;
     int cpu_usage = (int)(100.0f - idle_percent);
@@ -331,25 +545,18 @@ static int calculate_cpu_usage() {
     return cpu_usage;
 }
 
-// Background task: Calculate CPU usage every 1s, track min/max over 60s window
+// Background task: Calculate CPU usage every 1s
 static void cpu_monitoring_task(void* param) {
     while (true) {
         int new_value = calculate_cpu_usage();
-        unsigned long now = millis();
         
         xSemaphoreTake(cpu_mutex, portMAX_DELAY);
         
-        cpu_usage_current = new_value;
-        
-        // Update min/max
-        if (new_value < cpu_usage_min) cpu_usage_min = new_value;
-        if (new_value > cpu_usage_max) cpu_usage_max = new_value;
-        
-        // Reset min/max every 60 seconds
-        if (last_minmax_reset == 0 || (now - last_minmax_reset >= CPU_MINMAX_WINDOW_SECONDS * 1000UL)) {
-            cpu_usage_min = new_value;
-            cpu_usage_max = new_value;
-            last_minmax_reset = now;
+        if (new_value >= 0) {
+            cpu_usage_current = new_value;
+        } else {
+            // Unknown / unsupported measurement
+            cpu_usage_current = -1;
         }
         
         xSemaphoreGive(cpu_mutex);
@@ -393,20 +600,9 @@ int device_telemetry_get_cpu_usage() {
     return value;
 }
 
-void device_telemetry_get_cpu_minmax(int* out_min, int* out_max) {
-    if (cpu_mutex == nullptr) {
-        if (out_min) *out_min = 0;
-        if (out_max) *out_max = 0;
-        return;
-    }
-    
-    xSemaphoreTake(cpu_mutex, portMAX_DELAY);
-    if (out_min) *out_min = cpu_usage_min;
-    if (out_max) *out_max = cpu_usage_max;
-    xSemaphoreGive(cpu_mutex);
-}
-
 static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool include_debug_fields) {
+    fs_health_init();
+
     // System
     uint64_t uptime_us = esp_timer_get_time();
     doc["uptime_seconds"] = uptime_us / 1000000;
@@ -433,12 +629,13 @@ static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool inc
         doc["cpu_freq"] = ESP.getCpuFreqMHz();
     }
 
-    // CPU usage with min/max over 60s window
-    doc["cpu_usage"] = device_telemetry_get_cpu_usage();
-    int cpu_min, cpu_max;
-    device_telemetry_get_cpu_minmax(&cpu_min, &cpu_max);
-    doc["cpu_usage_min"] = cpu_min;
-    doc["cpu_usage_max"] = cpu_max;
+    // CPU usage
+    const int cpu_usage = device_telemetry_get_cpu_usage();
+    if (cpu_usage >= 0) {
+        doc["cpu_usage"] = cpu_usage;
+    } else {
+        doc["cpu_usage"] = nullptr;
+    }
 
     // CPU / SoC temperature
 #if SOC_TEMP_SENSOR_SUPPORTED
@@ -506,21 +703,38 @@ static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool inc
     // IMPORTANT: On PSRAM boards, `heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)` can return a PSRAM block,
     // while `ESP.getFreeHeap()` reports internal heap only. Mixing those yields negative fragmentation.
     // We define heap fragmentation as INTERNAL heap fragmentation.
-    float heap_frag = 0;
-    if (internal_free > 0 && internal_largest <= internal_free) {
-        heap_frag = (1.0f - ((float)internal_largest / (float)internal_free)) * 100.0f;
-    }
-    if (heap_frag < 0) heap_frag = 0;
-    if (heap_frag > 100) heap_frag = 100;
-    doc["heap_fragmentation"] = (int)heap_frag;
+    const int heap_frag = compute_fragmentation_percent(internal_free, internal_largest);
+    doc["heap_fragmentation"] = heap_frag;
 
-    float psram_frag = 0;
-    if (psram_free > 0 && psram_largest <= psram_free) {
-        psram_frag = (1.0f - ((float)psram_largest / (float)psram_free)) * 100.0f;
+    const int psram_frag = compute_fragmentation_percent(psram_free, psram_largest);
+    doc["psram_fragmentation"] = psram_frag;
+
+    // Windowed min/max sampling between /api/health calls.
+    // Only include (and reset) these fields for the web API path.
+    if (include_debug_fields) {
+        const HealthWindowStats win = health_window_get_and_reset(internal_free, internal_largest, psram_free, psram_largest);
+        if (win.initialized) {
+            doc["heap_internal_free_min_window"] = win.internal_free_min;
+            doc["heap_internal_free_max_window"] = win.internal_free_max;
+            doc["heap_internal_largest_min_window"] = win.internal_largest_min;
+            doc["heap_fragmentation_max_window"] = win.internal_frag_max;
+
+            doc["psram_free_min_window"] = win.psram_free_min;
+            doc["psram_free_max_window"] = win.psram_free_max;
+            doc["psram_largest_min_window"] = win.psram_largest_min;
+            doc["psram_fragmentation_max_window"] = win.psram_frag_max;
+        } else {
+            doc["heap_internal_free_min_window"] = nullptr;
+            doc["heap_internal_free_max_window"] = nullptr;
+            doc["heap_internal_largest_min_window"] = nullptr;
+            doc["heap_fragmentation_max_window"] = nullptr;
+
+            doc["psram_free_min_window"] = nullptr;
+            doc["psram_free_max_window"] = nullptr;
+            doc["psram_largest_min_window"] = nullptr;
+            doc["psram_fragmentation_max_window"] = nullptr;
+        }
     }
-    if (psram_frag < 0) psram_frag = 0;
-    if (psram_frag > 100) psram_frag = 100;
-    doc["psram_fragmentation"] = (int)psram_frag;
 
     // Flash usage
     const size_t sketch_size = device_telemetry_sketch_size();
@@ -528,13 +742,85 @@ static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool inc
     doc["flash_used"] = sketch_size;
     doc["flash_total"] = sketch_size + free_sketch_space;
 
+    // Filesystem (cached; no mounting/probing from /api/health)
+    {
+        FSHealthStats fs;
+        fs_health_get(&fs);
+
+        if (fs.ffat_partition_present) {
+            doc["fs_type"] = "ffat";
+            doc["fs_mounted"] = fs.ffat_mounted;
+            if (fs.ffat_mounted && fs.ffat_total_bytes > 0) {
+                doc["fs_used_bytes"] = fs.ffat_used_bytes;
+                doc["fs_total_bytes"] = fs.ffat_total_bytes;
+            } else {
+                doc["fs_used_bytes"] = nullptr;
+                doc["fs_total_bytes"] = nullptr;
+            }
+        } else {
+            doc["fs_type"] = nullptr;
+            doc["fs_mounted"] = nullptr;
+            doc["fs_used_bytes"] = nullptr;
+            doc["fs_total_bytes"] = nullptr;
+        }
+    }
+
+    // MQTT status (best-effort)
+#if HAS_MQTT
+    {
+        doc["mqtt_enabled"] = mqtt_manager.enabled();
+        doc["mqtt_publish_enabled"] = mqtt_manager.publishEnabled();
+        const bool connected = mqtt_manager.connected();
+        doc["mqtt_connected"] = connected;
+        const unsigned long last_pub = mqtt_manager.lastHealthPublishMs();
+        if (last_pub) {
+            doc["mqtt_last_health_publish_ms"] = (uint32_t)last_pub;
+            doc["mqtt_health_publish_age_ms"] = (uint32_t)(millis() - last_pub);
+        } else {
+            doc["mqtt_last_health_publish_ms"] = nullptr;
+            doc["mqtt_health_publish_age_ms"] = nullptr;
+        }
+    }
+#else
+    doc["mqtt_enabled"] = false;
+    doc["mqtt_publish_enabled"] = false;
+    doc["mqtt_connected"] = nullptr;
+    doc["mqtt_last_health_publish_ms"] = nullptr;
+    doc["mqtt_health_publish_age_ms"] = nullptr;
+#endif
+
+    // Display perf stats (best-effort)
+#if HAS_DISPLAY
+    {
+        DisplayPerfStats stats;
+        if (display_manager_get_perf_stats(&stats)) {
+            doc["display_fps"] = stats.fps;
+            doc["display_lv_timer_us"] = stats.lv_timer_us;
+            doc["display_present_us"] = stats.present_us;
+        } else {
+            doc["display_fps"] = nullptr;
+            doc["display_lv_timer_us"] = nullptr;
+            doc["display_present_us"] = nullptr;
+        }
+    }
+#else
+    doc["display_fps"] = nullptr;
+    doc["display_lv_timer_us"] = nullptr;
+    doc["display_present_us"] = nullptr;
+#endif
+
     // WiFi stats (only if connected)
     if (WiFi.status() == WL_CONNECTED) {
         doc["wifi_rssi"] = WiFi.RSSI();
 
         if (include_ip_and_channel) {
             doc["wifi_channel"] = WiFi.channel();
-            doc["ip_address"] = WiFi.localIP().toString();
+            {
+                IPAddress ip = WiFi.localIP();
+                char ip_buf[16];
+                snprintf(ip_buf, sizeof(ip_buf), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+                doc["ip_address"] = ip_buf;
+            }
             doc["hostname"] = WiFi.getHostname();
         }
     } else {
