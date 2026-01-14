@@ -19,6 +19,39 @@
                 <button type="button" id="health-close" class="health-close-btn">✕</button>
             </div>
             <div class="health-stats">
+                <!-- Sparklines (client-side history only) -->
+                <div class="health-sparkline" id="health-sparkline-cpu-wrap">
+                    <div class="health-sparkline-row">
+                        <span class="health-label">CPU Usage</span>
+                        <span class="health-value" id="health-sparkline-cpu-value">--</span>
+                    </div>
+                    <canvas id="health-sparkline-cpu" width="260" height="44"></canvas>
+                </div>
+
+                <div class="health-sparkline" id="health-sparkline-heap-wrap">
+                    <div class="health-sparkline-row">
+                        <span class="health-label">Internal Free Heap</span>
+                        <span class="health-value" id="health-sparkline-heap-value">--</span>
+                    </div>
+                    <canvas id="health-sparkline-heap" width="260" height="44"></canvas>
+                </div>
+
+                <div class="health-sparkline" id="health-sparkline-psram-wrap" style="display:none;">
+                    <div class="health-sparkline-row">
+                        <span class="health-label">PSRAM Free</span>
+                        <span class="health-value" id="health-sparkline-psram-value">--</span>
+                    </div>
+                    <canvas id="health-sparkline-psram" width="260" height="44"></canvas>
+                </div>
+
+                <div class="health-sparkline" id="health-sparkline-rssi-wrap">
+                    <div class="health-sparkline-row">
+                        <span class="health-label">WiFi RSSI</span>
+                        <span class="health-value" id="health-sparkline-rssi-value">--</span>
+                    </div>
+                    <canvas id="health-sparkline-rssi" width="260" height="44"></canvas>
+                </div>
+
                 <!-- System -->
                 <div class="health-stat">
                     <span class="health-label">Uptime</span>
@@ -51,13 +84,47 @@
                     <span class="health-value" id="health-heap-min">--</span>
                 </div>
                 <div class="health-stat">
-                    <span class="health-label">Heap Fragmentation</span>
+                    <span class="health-label">Internal Heap Fragmentation</span>
                     <span class="health-value" id="health-heap-frag">--</span>
+                </div>
+                <div class="health-stat">
+                    <span class="health-label">Internal Min Free Heap</span>
+                    <span class="health-value" id="health-internal-min">--</span>
+                </div>
+                <div class="health-stat">
+                    <span class="health-label">Internal Largest Block</span>
+                    <span class="health-value" id="health-internal-largest">--</span>
+                </div>
+                <div class="health-stat" id="health-psram-min-wrap" style="display:none;">
+                    <span class="health-label">PSRAM Min Free Heap</span>
+                    <span class="health-value" id="health-psram-min">--</span>
+                </div>
+                <div class="health-stat" id="health-psram-frag-wrap" style="display:none;">
+                    <span class="health-label">PSRAM Fragmentation</span>
+                    <span class="health-value" id="health-psram-frag">--</span>
                 </div>
                 <!-- Storage -->
                 <div class="health-stat">
                     <span class="health-label">Flash Usage</span>
                     <span class="health-value" id="health-flash">--</span>
+                </div>
+                <div class="health-stat">
+                    <span class="health-label">FS</span>
+                    <span class="health-value" id="health-fs">--</span>
+                </div>
+                <!-- Display -->
+                <div class="health-stat">
+                    <span class="health-label">Rendered FPS</span>
+                    <span class="health-value" id="health-display-fps">--</span>
+                </div>
+                <div class="health-stat">
+                    <span class="health-label">LVGL Handler / Present</span>
+                    <span class="health-value" id="health-display-times">--</span>
+                </div>
+                <!-- MQTT -->
+                <div class="health-stat">
+                    <span class="health-label">MQTT</span>
+                    <span class="health-value" id="health-mqtt">--</span>
                 </div>
                 <!-- Network -->
                 <div class="health-stat">

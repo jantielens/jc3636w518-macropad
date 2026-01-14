@@ -225,6 +225,17 @@ public:
 // Global instance (managed by app.ino)
 extern DisplayManager* displayManager;
 
+// Lightweight perf stats updated by the LVGL rendering task.
+// Safe to read from non-LVGL tasks (e.g., AsyncTCP /api/health handler).
+typedef struct DisplayPerfStats {
+    uint16_t fps;
+    uint32_t lv_timer_us;
+    uint32_t present_us;
+} DisplayPerfStats;
+
+// Returns true if stats are available (HAS_DISPLAY).
+bool display_manager_get_perf_stats(DisplayPerfStats* out);
+
 // C-style interface for app.ino
 void display_manager_init(DeviceConfig* config);
 void display_manager_show_splash();

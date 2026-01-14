@@ -6,6 +6,8 @@
 #include <FFat.h>
 #include <esp_partition.h>
 
+#include "fs_health.h"
+
 #include <string.h>
 
 namespace {
@@ -51,6 +53,11 @@ static bool ensure_ffat() {
     }
 
     ffat_ready = FFat.begin(false);
+    if (ffat_ready) {
+        // Report usage to the health module (best-effort). This is called only
+        // when some icon operation needed FFat, not from /api/health.
+        fs_health_set_ffat_usage((uint32_t)FFat.usedBytes(), (uint32_t)FFat.totalBytes());
+    }
     return ffat_ready;
 }
 

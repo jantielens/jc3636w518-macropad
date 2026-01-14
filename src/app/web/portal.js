@@ -3237,6 +3237,119 @@ const API_HEALTH = '/api/health';
 let healthExpanded = false;
 let healthUpdateInterval = null;
 
+const HEALTH_POLL_INTERVAL_DEFAULT_MS = 5000;
+const HEALTH_HISTORY_DEFAULT_SECONDS = 300;
+let healthPollIntervalMs = HEALTH_POLL_INTERVAL_DEFAULT_MS;
+let healthHistoryMaxSamples = 60;
+
+const healthHistory = {
+    cpu: [],
+    heapInternalFree: [],
+    psramFree: [],
+    wifiRssi: [],
+};
+
+function healthConfigureFromDeviceInfo(info) {
+    const pollMs = (info && typeof info.health_poll_interval_ms === 'number') ? info.health_poll_interval_ms : HEALTH_POLL_INTERVAL_DEFAULT_MS;
+    const windowSeconds = (info && typeof info.health_history_seconds === 'number') ? info.health_history_seconds : HEALTH_HISTORY_DEFAULT_SECONDS;
+
+    // Clamp to sane values.
+    healthPollIntervalMs = Math.max(1000, Math.min(60000, pollMs | 0));
+    const seconds = Math.max(30, Math.min(3600, windowSeconds | 0));
+    healthHistoryMaxSamples = Math.max(10, Math.min(600, Math.floor((seconds * 1000) / healthPollIntervalMs)));
+}
+
+function healthPushSample(arr, value) {
+    if (!Array.isArray(arr)) return;
+    if (typeof value !== 'number' || !isFinite(value)) return;
+    arr.push(value);
+    while (arr.length > healthHistoryMaxSamples) arr.shift();
+}
+
+function healthFormatBytes(bytes) {
+    if (typeof bytes !== 'number' || !isFinite(bytes)) return '—';
+    return formatHeap(bytes);
+}
+
+function sparklineDraw(canvas, values, { color = '#667eea', strokeWidth = 2, min = null, max = null } = {}) {
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const data = Array.isArray(values) ? values : [];
+    if (data.length < 1) {
+        // Placeholder baseline.
+        ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, h - 1);
+        ctx.lineTo(w, h - 1);
+        ctx.stroke();
+        return;
+    }
+
+    let vmin = (typeof min === 'number') ? min : Infinity;
+    let vmax = (typeof max === 'number') ? max : -Infinity;
+    if (!(typeof min === 'number') || !(typeof max === 'number')) {
+        for (const v of data) {
+            if (typeof v !== 'number' || !isFinite(v)) continue;
+            if (v < vmin) vmin = v;
+            if (v > vmax) vmax = v;
+        }
+    }
+    if (!isFinite(vmin) || !isFinite(vmax)) {
+        vmin = 0;
+        vmax = 1;
+    } else if (vmin === vmax) {
+        // Flat series: expand around the value so it renders on-canvas.
+        const eps = Math.max(1, Math.abs(vmin) * 0.01);
+        vmin = vmin - eps;
+        vmax = vmax + eps;
+    }
+
+    const pad = 4;
+    const xStep = (data.length >= 2) ? ((w - pad * 2) / (data.length - 1)) : 0;
+    const yScale = (h - pad * 2) / (vmax - vmin);
+
+    // Subtle grid baseline
+    ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, h - 1);
+    ctx.lineTo(w, h - 1);
+    ctx.stroke();
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = strokeWidth;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    if (data.length === 1) {
+        // Single sample: draw a small marker so the user sees "something" immediately.
+        const v = data[0];
+        const x = pad;
+        const y = h - pad - ((v - vmin) * yScale);
+        ctx.beginPath();
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+        ctx.stroke();
+        return;
+    }
+
+    ctx.beginPath();
+    for (let i = 0; i < data.length; i++) {
+        const v = data[i];
+        const x = pad + i * xStep;
+        const y = h - pad - ((v - vmin) * yScale);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+}
+
 // Format uptime to readable string
 function formatUptime(seconds) {
     const days = Math.floor(seconds / 86400);
@@ -3279,6 +3392,21 @@ async function updateHealth() {
         if (!response.ok) return;
         
         const health = await response.json();
+
+        const hasPsram = (
+            (deviceInfoCache && typeof deviceInfoCache.psram_size === 'number' && deviceInfoCache.psram_size > 0) ||
+            (typeof health.psram_free === 'number' && health.psram_free > 0)
+        );
+
+        // Feed client-side history buffers (no device-side time series).
+        healthPushSample(healthHistory.cpu, health.cpu_usage);
+        healthPushSample(healthHistory.heapInternalFree, health.heap_internal_free);
+        if (hasPsram) {
+            healthPushSample(healthHistory.psramFree, health.psram_free);
+        }
+        if (health.wifi_rssi !== null && health.wifi_rssi !== undefined) {
+            healthPushSample(healthHistory.wifiRssi, health.wifi_rssi);
+        }
         
         // Update compact view
         document.getElementById('health-cpu').textContent = `CPU ${health.cpu_usage}%`;
@@ -3305,11 +3433,47 @@ async function updateHealth() {
         document.getElementById('health-cpu-minmax').textContent = `${health.cpu_usage_min}% / ${health.cpu_usage_max}%`;
         document.getElementById('health-temp').textContent = health.cpu_temperature !== null ? 
             `${health.cpu_temperature}°C` : 'N/A';
+
+        // Sparklines
+        const cpuSparkValue = document.getElementById('health-sparkline-cpu-value');
+        if (cpuSparkValue) cpuSparkValue.textContent = `${health.cpu_usage}%`;
+        sparklineDraw(document.getElementById('health-sparkline-cpu'), healthHistory.cpu, { color: '#667eea', min: 0, max: 100 });
+
+        const heapSparkValue = document.getElementById('health-sparkline-heap-value');
+        if (heapSparkValue) heapSparkValue.textContent = healthFormatBytes(health.heap_internal_free);
+        sparklineDraw(document.getElementById('health-sparkline-heap'), healthHistory.heapInternalFree, { color: '#34c759' });
+
+        const psramWrap = document.getElementById('health-sparkline-psram-wrap');
+        if (psramWrap) psramWrap.style.display = hasPsram ? '' : 'none';
+        const psramSparkValue = document.getElementById('health-sparkline-psram-value');
+        if (psramSparkValue) psramSparkValue.textContent = hasPsram ? healthFormatBytes(health.psram_free) : '—';
+        sparklineDraw(document.getElementById('health-sparkline-psram'), healthHistory.psramFree, { color: '#0a84ff' });
+
+        const rssiSparkValue = document.getElementById('health-sparkline-rssi-value');
+        if (rssiSparkValue) {
+            rssiSparkValue.textContent = (health.wifi_rssi !== null && health.wifi_rssi !== undefined) ? `${health.wifi_rssi} dBm` : 'N/A';
+        }
+        sparklineDraw(document.getElementById('health-sparkline-rssi'), healthHistory.wifiRssi, { color: '#ff9500', min: -100, max: -30 });
         
         // Memory
         document.getElementById('health-heap').textContent = formatHeap(health.heap_free);
         document.getElementById('health-heap-min').textContent = formatHeap(health.heap_min);
         document.getElementById('health-heap-frag').textContent = `${health.heap_fragmentation}%`;
+        const internalMin = document.getElementById('health-internal-min');
+        if (internalMin) internalMin.textContent = healthFormatBytes(health.heap_internal_min);
+
+        const internalLargest = document.getElementById('health-internal-largest');
+        if (internalLargest) internalLargest.textContent = healthFormatBytes(health.heap_internal_largest);
+
+        const psramMinWrap = document.getElementById('health-psram-min-wrap');
+        if (psramMinWrap) psramMinWrap.style.display = hasPsram ? '' : 'none';
+        const psramMin = document.getElementById('health-psram-min');
+        if (psramMin) psramMin.textContent = hasPsram ? healthFormatBytes(health.psram_min) : '—';
+
+        const psramFragWrap = document.getElementById('health-psram-frag-wrap');
+        if (psramFragWrap) psramFragWrap.style.display = hasPsram ? '' : 'none';
+        const psramFrag = document.getElementById('health-psram-frag');
+        if (psramFrag) psramFrag.textContent = hasPsram ? `${health.psram_fragmentation}%` : '—';
         
         // Flash
         const flashUsed = (health.flash_used / 1024).toFixed(0);
@@ -3327,6 +3491,40 @@ async function updateHealth() {
             document.getElementById('health-rssi').textContent = 'Not connected';
             document.getElementById('health-ip').textContent = 'N/A';
         }
+
+        // FS
+        const fsEl = document.getElementById('health-fs');
+        if (fsEl) {
+            const t = health.fs_type;
+            if (!t) {
+                fsEl.textContent = 'N/A';
+            } else if (health.fs_mounted === true && typeof health.fs_used_bytes === 'number' && typeof health.fs_total_bytes === 'number') {
+                fsEl.textContent = `${t}: ${(health.fs_used_bytes / 1024).toFixed(0)} / ${(health.fs_total_bytes / 1024).toFixed(0)} KB`;
+            } else {
+                fsEl.textContent = `${t}: not mounted`;
+            }
+        }
+
+        // Display
+        const fpsEl = document.getElementById('health-display-fps');
+        if (fpsEl) fpsEl.textContent = (health.display_fps !== null && health.display_fps !== undefined) ? `${health.display_fps} fps` : 'N/A';
+        const timesEl = document.getElementById('health-display-times');
+        if (timesEl) {
+            if (typeof health.display_lv_timer_us === 'number' && typeof health.display_present_us === 'number') {
+                timesEl.textContent = `${(health.display_lv_timer_us / 1000).toFixed(1)}ms / ${(health.display_present_us / 1000).toFixed(1)}ms`;
+            } else {
+                timesEl.textContent = 'N/A';
+            }
+        }
+
+        // MQTT
+        const mqttEl = document.getElementById('health-mqtt');
+        if (mqttEl) {
+            if (health.mqtt_enabled === false) mqttEl.textContent = 'Disabled';
+            else if (health.mqtt_connected === true) mqttEl.textContent = 'Connected';
+            else if (health.mqtt_connected === false) mqttEl.textContent = 'Disconnected';
+            else mqttEl.textContent = 'N/A';
+        }
     } catch (error) {
         console.error('Failed to fetch health stats:', error);
     }
@@ -3339,19 +3537,16 @@ function toggleHealthWidget() {
     if (healthExpanded) {
         document.getElementById('health-expanded').style.display = 'block';
         updateHealth(); // Immediate update when opened
-        // Update every 5 seconds when expanded
-        healthUpdateInterval = setInterval(updateHealth, 5000);
     } else {
         document.getElementById('health-expanded').style.display = 'none';
-        if (healthUpdateInterval) {
-            clearInterval(healthUpdateInterval);
-            healthUpdateInterval = null;
-        }
     }
 }
 
 // Initialize health widget
 function initHealthWidget() {
+    // Configure polling based on device info if available.
+    healthConfigureFromDeviceInfo(deviceInfoCache);
+
     // Click health badge in header to expand
     const healthBadge = document.getElementById('health-badge');
     if (healthBadge) {
@@ -3363,11 +3558,8 @@ function initHealthWidget() {
     
     // Initial health fetch
     updateHealth();
-    
-    // Update compact view every 10 seconds
-    setInterval(() => {
-        if (!healthExpanded) {
-            updateHealth();
-        }
-    }, 10000);
+
+    // Always poll at the configured interval so history is continuous.
+    if (healthUpdateInterval) clearInterval(healthUpdateInterval);
+    healthUpdateInterval = setInterval(updateHealth, healthPollIntervalMs);
 }

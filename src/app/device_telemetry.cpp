@@ -3,6 +3,16 @@
 #include "board_config.h"
 #include "log_manager.h"
 
+#include "fs_health.h"
+
+#if HAS_MQTT
+#include "mqtt_manager.h"
+#endif
+
+#if HAS_DISPLAY
+#include "display_manager.h"
+#endif
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include "soc/soc_caps.h"
@@ -407,6 +417,8 @@ void device_telemetry_get_cpu_minmax(int* out_min, int* out_max) {
 }
 
 static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool include_debug_fields) {
+    fs_health_init();
+
     // System
     uint64_t uptime_us = esp_timer_get_time();
     doc["uptime_seconds"] = uptime_us / 1000000;
@@ -528,13 +540,85 @@ static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool inc
     doc["flash_used"] = sketch_size;
     doc["flash_total"] = sketch_size + free_sketch_space;
 
+    // Filesystem (cached; no mounting/probing from /api/health)
+    {
+        FSHealthStats fs;
+        fs_health_get(&fs);
+
+        if (fs.ffat_partition_present) {
+            doc["fs_type"] = "ffat";
+            doc["fs_mounted"] = fs.ffat_mounted;
+            if (fs.ffat_mounted && fs.ffat_total_bytes > 0) {
+                doc["fs_used_bytes"] = fs.ffat_used_bytes;
+                doc["fs_total_bytes"] = fs.ffat_total_bytes;
+            } else {
+                doc["fs_used_bytes"] = nullptr;
+                doc["fs_total_bytes"] = nullptr;
+            }
+        } else {
+            doc["fs_type"] = nullptr;
+            doc["fs_mounted"] = nullptr;
+            doc["fs_used_bytes"] = nullptr;
+            doc["fs_total_bytes"] = nullptr;
+        }
+    }
+
+    // MQTT status (best-effort)
+#if HAS_MQTT
+    {
+        doc["mqtt_enabled"] = mqtt_manager.enabled();
+        doc["mqtt_publish_enabled"] = mqtt_manager.publishEnabled();
+        const bool connected = mqtt_manager.connected();
+        doc["mqtt_connected"] = connected;
+        const unsigned long last_pub = mqtt_manager.lastHealthPublishMs();
+        if (last_pub) {
+            doc["mqtt_last_health_publish_ms"] = (uint32_t)last_pub;
+            doc["mqtt_health_publish_age_ms"] = (uint32_t)(millis() - last_pub);
+        } else {
+            doc["mqtt_last_health_publish_ms"] = nullptr;
+            doc["mqtt_health_publish_age_ms"] = nullptr;
+        }
+    }
+#else
+    doc["mqtt_enabled"] = false;
+    doc["mqtt_publish_enabled"] = false;
+    doc["mqtt_connected"] = nullptr;
+    doc["mqtt_last_health_publish_ms"] = nullptr;
+    doc["mqtt_health_publish_age_ms"] = nullptr;
+#endif
+
+    // Display perf stats (best-effort)
+#if HAS_DISPLAY
+    {
+        DisplayPerfStats stats;
+        if (display_manager_get_perf_stats(&stats)) {
+            doc["display_fps"] = stats.fps;
+            doc["display_lv_timer_us"] = stats.lv_timer_us;
+            doc["display_present_us"] = stats.present_us;
+        } else {
+            doc["display_fps"] = nullptr;
+            doc["display_lv_timer_us"] = nullptr;
+            doc["display_present_us"] = nullptr;
+        }
+    }
+#else
+    doc["display_fps"] = nullptr;
+    doc["display_lv_timer_us"] = nullptr;
+    doc["display_present_us"] = nullptr;
+#endif
+
     // WiFi stats (only if connected)
     if (WiFi.status() == WL_CONNECTED) {
         doc["wifi_rssi"] = WiFi.RSSI();
 
         if (include_ip_and_channel) {
             doc["wifi_channel"] = WiFi.channel();
-            doc["ip_address"] = WiFi.localIP().toString();
+            {
+                IPAddress ip = WiFi.localIP();
+                char ip_buf[16];
+                snprintf(ip_buf, sizeof(ip_buf), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+                doc["ip_address"] = ip_buf;
+            }
             doc["hostname"] = WiFi.getHostname();
         }
     } else {

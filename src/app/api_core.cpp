@@ -90,6 +90,10 @@ static void handleGetVersion(AsyncWebServerRequest* request) {
     doc["project_name"] = PROJECT_NAME;
     doc["project_display_name"] = PROJECT_DISPLAY_NAME;
 
+    // Web portal health widget configuration (client-side only).
+    doc["health_poll_interval_ms"] = HEALTH_POLL_INTERVAL_MS;
+    doc["health_history_seconds"] = HEALTH_HISTORY_SECONDS;
+
     // Build metadata for GitHub-based updates
 #ifdef BUILD_BOARD_NAME
     doc["board_name"] = BUILD_BOARD_NAME;
