@@ -3245,7 +3245,11 @@ let healthHistoryMaxSamples = 60;
 const healthHistory = {
     cpu: [],
     heapInternalFree: [],
+    heapInternalFreeMin: [],
+    heapInternalFreeMax: [],
     psramFree: [],
+    psramFreeMin: [],
+    psramFreeMax: [],
     wifiRssi: [],
 };
 
@@ -3271,7 +3275,15 @@ function healthFormatBytes(bytes) {
     return formatHeap(bytes);
 }
 
-function sparklineDraw(canvas, values, { color = '#667eea', strokeWidth = 2, min = null, max = null } = {}) {
+function sparklineDraw(canvas, values, {
+    color = '#667eea',
+    strokeWidth = 2,
+    min = null,
+    max = null,
+    bandMin = null,
+    bandMax = null,
+    bandColor = 'rgba(102, 126, 234, 0.18)',
+} = {}) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -3292,13 +3304,32 @@ function sparklineDraw(canvas, values, { color = '#667eea', strokeWidth = 2, min
         return;
     }
 
+    const bandMinArr = Array.isArray(bandMin) ? bandMin : null;
+    const bandMaxArr = Array.isArray(bandMax) ? bandMax : null;
+
     let vmin = (typeof min === 'number') ? min : Infinity;
     let vmax = (typeof max === 'number') ? max : -Infinity;
     if (!(typeof min === 'number') || !(typeof max === 'number')) {
-        for (const v of data) {
-            if (typeof v !== 'number' || !isFinite(v)) continue;
-            if (v < vmin) vmin = v;
-            if (v > vmax) vmax = v;
+        for (let i = 0; i < data.length; i++) {
+            const v = data[i];
+            if (typeof v === 'number' && isFinite(v)) {
+                if (v < vmin) vmin = v;
+                if (v > vmax) vmax = v;
+            }
+            if (bandMinArr && i < bandMinArr.length) {
+                const bmin = bandMinArr[i];
+                if (typeof bmin === 'number' && isFinite(bmin)) {
+                    if (bmin < vmin) vmin = bmin;
+                    if (bmin > vmax) vmax = bmin;
+                }
+            }
+            if (bandMaxArr && i < bandMaxArr.length) {
+                const bmax = bandMaxArr[i];
+                if (typeof bmax === 'number' && isFinite(bmax)) {
+                    if (bmax < vmin) vmin = bmax;
+                    if (bmax > vmax) vmax = bmax;
+                }
+            }
         }
     }
     if (!isFinite(vmin) || !isFinite(vmax)) {
@@ -3322,6 +3353,32 @@ function sparklineDraw(canvas, values, { color = '#667eea', strokeWidth = 2, min
     ctx.moveTo(0, h - 1);
     ctx.lineTo(w, h - 1);
     ctx.stroke();
+
+    // Optional min/max band behind the line.
+    if (bandMinArr && bandMaxArr && data.length >= 2) {
+        const n = Math.min(data.length, bandMinArr.length, bandMaxArr.length);
+        if (n >= 2) {
+            ctx.fillStyle = bandColor;
+            ctx.beginPath();
+            for (let i = 0; i < n; i++) {
+                const bmax = bandMaxArr[i];
+                if (typeof bmax !== 'number' || !isFinite(bmax)) continue;
+                const x = pad + i * xStep;
+                const y = h - pad - ((bmax - vmin) * yScale);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            for (let i = n - 1; i >= 0; i--) {
+                const bmin = bandMinArr[i];
+                if (typeof bmin !== 'number' || !isFinite(bmin)) continue;
+                const x = pad + i * xStep;
+                const y = h - pad - ((bmin - vmin) * yScale);
+                ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.fill();
+        }
+    }
 
     ctx.strokeStyle = color;
     ctx.lineWidth = strokeWidth;
@@ -3401,8 +3458,22 @@ async function updateHealth() {
         // Feed client-side history buffers (no device-side time series).
         healthPushSample(healthHistory.cpu, health.cpu_usage);
         healthPushSample(healthHistory.heapInternalFree, health.heap_internal_free);
+        {
+            const cur = health.heap_internal_free;
+            const wmin = (typeof health.heap_internal_free_min_window === 'number') ? Math.min(health.heap_internal_free_min_window, cur) : cur;
+            const wmax = (typeof health.heap_internal_free_max_window === 'number') ? Math.max(health.heap_internal_free_max_window, cur) : cur;
+            healthPushSample(healthHistory.heapInternalFreeMin, wmin);
+            healthPushSample(healthHistory.heapInternalFreeMax, wmax);
+        }
         if (hasPsram) {
             healthPushSample(healthHistory.psramFree, health.psram_free);
+            {
+                const cur = health.psram_free;
+                const wmin = (typeof health.psram_free_min_window === 'number') ? Math.min(health.psram_free_min_window, cur) : cur;
+                const wmax = (typeof health.psram_free_max_window === 'number') ? Math.max(health.psram_free_max_window, cur) : cur;
+                healthPushSample(healthHistory.psramFreeMin, wmin);
+                healthPushSample(healthHistory.psramFreeMax, wmax);
+            }
         }
         if (health.wifi_rssi !== null && health.wifi_rssi !== undefined) {
             healthPushSample(healthHistory.wifiRssi, health.wifi_rssi);
@@ -3441,13 +3512,23 @@ async function updateHealth() {
 
         const heapSparkValue = document.getElementById('health-sparkline-heap-value');
         if (heapSparkValue) heapSparkValue.textContent = healthFormatBytes(health.heap_internal_free);
-        sparklineDraw(document.getElementById('health-sparkline-heap'), healthHistory.heapInternalFree, { color: '#34c759' });
+        sparklineDraw(document.getElementById('health-sparkline-heap'), healthHistory.heapInternalFree, {
+            color: '#34c759',
+            bandMin: healthHistory.heapInternalFreeMin,
+            bandMax: healthHistory.heapInternalFreeMax,
+            bandColor: 'rgba(52, 199, 89, 0.18)',
+        });
 
         const psramWrap = document.getElementById('health-sparkline-psram-wrap');
         if (psramWrap) psramWrap.style.display = hasPsram ? '' : 'none';
         const psramSparkValue = document.getElementById('health-sparkline-psram-value');
         if (psramSparkValue) psramSparkValue.textContent = hasPsram ? healthFormatBytes(health.psram_free) : '—';
-        sparklineDraw(document.getElementById('health-sparkline-psram'), healthHistory.psramFree, { color: '#0a84ff' });
+        sparklineDraw(document.getElementById('health-sparkline-psram'), healthHistory.psramFree, {
+            color: '#0a84ff',
+            bandMin: healthHistory.psramFreeMin,
+            bandMax: healthHistory.psramFreeMax,
+            bandColor: 'rgba(10, 132, 255, 0.18)',
+        });
 
         const rssiSparkValue = document.getElementById('health-sparkline-rssi-value');
         if (rssiSparkValue) {
@@ -3458,12 +3539,22 @@ async function updateHealth() {
         // Memory
         document.getElementById('health-heap').textContent = formatHeap(health.heap_free);
         document.getElementById('health-heap-min').textContent = formatHeap(health.heap_min);
-        document.getElementById('health-heap-frag').textContent = `${health.heap_fragmentation}%`;
+        if (typeof health.heap_fragmentation_max_window === 'number') {
+            document.getElementById('health-heap-frag').textContent = `${health.heap_fragmentation}% (max ${health.heap_fragmentation_max_window}%)`;
+        } else {
+            document.getElementById('health-heap-frag').textContent = `${health.heap_fragmentation}%`;
+        }
         const internalMin = document.getElementById('health-internal-min');
         if (internalMin) internalMin.textContent = healthFormatBytes(health.heap_internal_min);
 
         const internalLargest = document.getElementById('health-internal-largest');
-        if (internalLargest) internalLargest.textContent = healthFormatBytes(health.heap_internal_largest);
+        if (internalLargest) {
+            if (typeof health.heap_internal_largest_min_window === 'number') {
+                internalLargest.textContent = `${healthFormatBytes(health.heap_internal_largest)} (min ${healthFormatBytes(health.heap_internal_largest_min_window)})`;
+            } else {
+                internalLargest.textContent = healthFormatBytes(health.heap_internal_largest);
+            }
+        }
 
         const psramMinWrap = document.getElementById('health-psram-min-wrap');
         if (psramMinWrap) psramMinWrap.style.display = hasPsram ? '' : 'none';
@@ -3473,7 +3564,13 @@ async function updateHealth() {
         const psramFragWrap = document.getElementById('health-psram-frag-wrap');
         if (psramFragWrap) psramFragWrap.style.display = hasPsram ? '' : 'none';
         const psramFrag = document.getElementById('health-psram-frag');
-        if (psramFrag) psramFrag.textContent = hasPsram ? `${health.psram_fragmentation}%` : '—';
+        if (psramFrag) {
+            if (hasPsram && typeof health.psram_fragmentation_max_window === 'number') {
+                psramFrag.textContent = `${health.psram_fragmentation}% (max ${health.psram_fragmentation_max_window}%)`;
+            } else {
+                psramFrag.textContent = hasPsram ? `${health.psram_fragmentation}%` : '—';
+            }
+        }
         
         // Flash
         const flashUsed = (health.flash_used / 1024).toFixed(0);

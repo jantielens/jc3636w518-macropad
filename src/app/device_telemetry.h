@@ -40,6 +40,11 @@ void device_telemetry_get_cpu_minmax(int* out_min, int* out_max);
 // Must be called once during setup.
 void device_telemetry_start_cpu_monitoring();
 
+// Start background sampling for /api/health window min/max metrics.
+// Tracks min/max between /api/health calls and resets when /api/health is served.
+// Safe to call multiple times.
+void device_telemetry_start_health_window_sampling();
+
 // Capture a point-in-time memory snapshot (heap/internal heap/PSRAM).
 DeviceMemorySnapshot device_telemetry_get_memory_snapshot();
 

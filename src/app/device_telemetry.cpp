@@ -20,6 +20,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <freertos/timers.h>
 
 // Temperature sensor support (ESP32-C3, ESP32-S2, ESP32-S3, ESP32-C2, ESP32-C6, ESP32-H2)
 #if SOC_TEMP_SENSOR_SUPPORTED
@@ -58,6 +59,150 @@ static void get_memory_snapshot(
     size_t *out_psram_min,
     size_t *out_psram_largest
 );
+
+// /api/health min/max window sampling (reset on /api/health).
+// Goal: capture short-lived dips/spikes between HTTP polls without storing
+// time series on-device.
+namespace {
+static portMUX_TYPE g_health_window_mux = portMUX_INITIALIZER_UNLOCKED;
+static TimerHandle_t g_health_window_timer = nullptr;
+static constexpr uint32_t kHealthWindowSamplePeriodMs = 200;
+
+struct HealthWindowStats {
+    bool initialized;
+
+    size_t internal_free_min;
+    size_t internal_free_max;
+    size_t internal_largest_min;
+    int internal_frag_max;
+
+    size_t psram_free_min;
+    size_t psram_free_max;
+    size_t psram_largest_min;
+    int psram_frag_max;
+};
+
+static HealthWindowStats g_health_window = {};
+
+static int compute_fragmentation_percent(size_t free_bytes, size_t largest_bytes) {
+    if (free_bytes == 0) return 0;
+    if (largest_bytes > free_bytes) return 0;
+    float frag = (1.0f - ((float)largest_bytes / (float)free_bytes)) * 100.0f;
+    if (frag < 0) frag = 0;
+    if (frag > 100) frag = 100;
+    return (int)frag;
+}
+
+static void health_window_update_sample(size_t internal_free, size_t internal_largest, size_t psram_free, size_t psram_largest) {
+    const int internal_frag = compute_fragmentation_percent(internal_free, internal_largest);
+    const int psram_frag = compute_fragmentation_percent(psram_free, psram_largest);
+
+    portENTER_CRITICAL(&g_health_window_mux);
+
+    if (!g_health_window.initialized) {
+        g_health_window.initialized = true;
+
+        g_health_window.internal_free_min = internal_free;
+        g_health_window.internal_free_max = internal_free;
+        g_health_window.internal_largest_min = internal_largest;
+        g_health_window.internal_frag_max = internal_frag;
+
+        g_health_window.psram_free_min = psram_free;
+        g_health_window.psram_free_max = psram_free;
+        g_health_window.psram_largest_min = psram_largest;
+        g_health_window.psram_frag_max = psram_frag;
+
+        portEXIT_CRITICAL(&g_health_window_mux);
+        return;
+    }
+
+    if (internal_free < g_health_window.internal_free_min) g_health_window.internal_free_min = internal_free;
+    if (internal_free > g_health_window.internal_free_max) g_health_window.internal_free_max = internal_free;
+    if (internal_largest < g_health_window.internal_largest_min) g_health_window.internal_largest_min = internal_largest;
+    if (internal_frag > g_health_window.internal_frag_max) g_health_window.internal_frag_max = internal_frag;
+
+    if (psram_free < g_health_window.psram_free_min) g_health_window.psram_free_min = psram_free;
+    if (psram_free > g_health_window.psram_free_max) g_health_window.psram_free_max = psram_free;
+    if (psram_largest < g_health_window.psram_largest_min) g_health_window.psram_largest_min = psram_largest;
+    if (psram_frag > g_health_window.psram_frag_max) g_health_window.psram_frag_max = psram_frag;
+
+    portEXIT_CRITICAL(&g_health_window_mux);
+}
+
+static void health_window_timer_cb(TimerHandle_t) {
+    size_t heap_free = 0;
+    size_t heap_min = 0;
+    size_t heap_largest = 0;
+    size_t internal_free = 0;
+    size_t internal_min = 0;
+    size_t psram_free = 0;
+    size_t psram_min = 0;
+    size_t psram_largest = 0;
+
+    get_memory_snapshot(
+        &heap_free,
+        &heap_min,
+        &heap_largest,
+        &internal_free,
+        &internal_min,
+        &psram_free,
+        &psram_min,
+        &psram_largest
+    );
+
+    // heap_largest is computed as INTERNAL largest free block (see get_memory_snapshot).
+    health_window_update_sample(internal_free, heap_largest, psram_free, psram_largest);
+}
+
+static HealthWindowStats health_window_get_and_reset(size_t internal_free_now, size_t internal_largest_now, size_t psram_free_now, size_t psram_largest_now) {
+    const int internal_frag_now = compute_fragmentation_percent(internal_free_now, internal_largest_now);
+    const int psram_frag_now = compute_fragmentation_percent(psram_free_now, psram_largest_now);
+
+    HealthWindowStats snap;
+
+    portENTER_CRITICAL(&g_health_window_mux);
+
+    // Ensure the current point-in-time values are included in the window we return.
+    if (!g_health_window.initialized) {
+        g_health_window.initialized = true;
+        g_health_window.internal_free_min = internal_free_now;
+        g_health_window.internal_free_max = internal_free_now;
+        g_health_window.internal_largest_min = internal_largest_now;
+        g_health_window.internal_frag_max = internal_frag_now;
+        g_health_window.psram_free_min = psram_free_now;
+        g_health_window.psram_free_max = psram_free_now;
+        g_health_window.psram_largest_min = psram_largest_now;
+        g_health_window.psram_frag_max = psram_frag_now;
+    } else {
+        if (internal_free_now < g_health_window.internal_free_min) g_health_window.internal_free_min = internal_free_now;
+        if (internal_free_now > g_health_window.internal_free_max) g_health_window.internal_free_max = internal_free_now;
+        if (internal_largest_now < g_health_window.internal_largest_min) g_health_window.internal_largest_min = internal_largest_now;
+        if (internal_frag_now > g_health_window.internal_frag_max) g_health_window.internal_frag_max = internal_frag_now;
+
+        if (psram_free_now < g_health_window.psram_free_min) g_health_window.psram_free_min = psram_free_now;
+        if (psram_free_now > g_health_window.psram_free_max) g_health_window.psram_free_max = psram_free_now;
+        if (psram_largest_now < g_health_window.psram_largest_min) g_health_window.psram_largest_min = psram_largest_now;
+        if (psram_frag_now > g_health_window.psram_frag_max) g_health_window.psram_frag_max = psram_frag_now;
+    }
+
+    snap = g_health_window;
+
+    // Reset the window and immediately seed the next window with the current values.
+    g_health_window = {};
+    g_health_window.initialized = true;
+    g_health_window.internal_free_min = internal_free_now;
+    g_health_window.internal_free_max = internal_free_now;
+    g_health_window.internal_largest_min = internal_largest_now;
+    g_health_window.internal_frag_max = internal_frag_now;
+    g_health_window.psram_free_min = psram_free_now;
+    g_health_window.psram_free_max = psram_free_now;
+    g_health_window.psram_largest_min = psram_largest_now;
+    g_health_window.psram_frag_max = psram_frag_now;
+
+    portEXIT_CRITICAL(&g_health_window_mux);
+    return snap;
+}
+} // namespace
 
 // One-shot tripwire state (per boot).
 static bool g_low_mem_tripwire_fired = false;
@@ -270,6 +415,26 @@ void device_telemetry_init() {
     cached_sketch_size = ESP.getSketchSize();
     cached_free_sketch_space = ESP.getFreeSketchSpace();
     flash_cache_initialized = true;
+}
+
+void device_telemetry_start_health_window_sampling() {
+    if (g_health_window_timer != nullptr) return;
+
+    // FreeRTOS timer runs on the timer service task. This avoids adding a new task.
+    g_health_window_timer = xTimerCreate(
+        "health_win",
+        pdMS_TO_TICKS(kHealthWindowSamplePeriodMs),
+        pdTRUE,
+        nullptr,
+        health_window_timer_cb
+    );
+    if (g_health_window_timer == nullptr) {
+        Logger.logMessage("HealthWin", "Failed to create sampler timer");
+        return;
+    }
+    if (xTimerStart(g_health_window_timer, 0) != pdPASS) {
+        Logger.logMessage("HealthWin", "Failed to start sampler timer");
+    }
 }
 
 size_t device_telemetry_sketch_size() {
@@ -518,21 +683,38 @@ static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool inc
     // IMPORTANT: On PSRAM boards, `heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)` can return a PSRAM block,
     // while `ESP.getFreeHeap()` reports internal heap only. Mixing those yields negative fragmentation.
     // We define heap fragmentation as INTERNAL heap fragmentation.
-    float heap_frag = 0;
-    if (internal_free > 0 && internal_largest <= internal_free) {
-        heap_frag = (1.0f - ((float)internal_largest / (float)internal_free)) * 100.0f;
-    }
-    if (heap_frag < 0) heap_frag = 0;
-    if (heap_frag > 100) heap_frag = 100;
-    doc["heap_fragmentation"] = (int)heap_frag;
+    const int heap_frag = compute_fragmentation_percent(internal_free, internal_largest);
+    doc["heap_fragmentation"] = heap_frag;
 
-    float psram_frag = 0;
-    if (psram_free > 0 && psram_largest <= psram_free) {
-        psram_frag = (1.0f - ((float)psram_largest / (float)psram_free)) * 100.0f;
+    const int psram_frag = compute_fragmentation_percent(psram_free, psram_largest);
+    doc["psram_fragmentation"] = psram_frag;
+
+    // Windowed min/max sampling between /api/health calls.
+    // Only include (and reset) these fields for the web API path.
+    if (include_debug_fields) {
+        const HealthWindowStats win = health_window_get_and_reset(internal_free, internal_largest, psram_free, psram_largest);
+        if (win.initialized) {
+            doc["heap_internal_free_min_window"] = win.internal_free_min;
+            doc["heap_internal_free_max_window"] = win.internal_free_max;
+            doc["heap_internal_largest_min_window"] = win.internal_largest_min;
+            doc["heap_fragmentation_max_window"] = win.internal_frag_max;
+
+            doc["psram_free_min_window"] = win.psram_free_min;
+            doc["psram_free_max_window"] = win.psram_free_max;
+            doc["psram_largest_min_window"] = win.psram_largest_min;
+            doc["psram_fragmentation_max_window"] = win.psram_frag_max;
+        } else {
+            doc["heap_internal_free_min_window"] = nullptr;
+            doc["heap_internal_free_max_window"] = nullptr;
+            doc["heap_internal_largest_min_window"] = nullptr;
+            doc["heap_fragmentation_max_window"] = nullptr;
+
+            doc["psram_free_min_window"] = nullptr;
+            doc["psram_free_max_window"] = nullptr;
+            doc["psram_largest_min_window"] = nullptr;
+            doc["psram_fragmentation_max_window"] = nullptr;
+        }
     }
-    if (psram_frag < 0) psram_frag = 0;
-    if (psram_frag > 100) psram_frag = 100;
-    doc["psram_fragmentation"] = (int)psram_frag;
 
     // Flash usage
     const size_t sketch_size = device_telemetry_sketch_size();
