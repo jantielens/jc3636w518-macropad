@@ -255,13 +255,7 @@ void device_telemetry_log_memory_snapshot(const char *tag) {
     // pf=psram_free pm=psram_min pl=psram_largest
     // frag=heap fragmentation percent (based on hl/hf)
 
-    unsigned frag_percent = 0;
-    if (heap_free > 0) {
-        float fragmentation = (1.0f - ((float)heap_largest / (float)heap_free)) * 100.0f;
-        if (fragmentation < 0) fragmentation = 0;
-        if (fragmentation > 100) fragmentation = 100;
-        frag_percent = (unsigned)fragmentation;
-    }
+    const unsigned frag_percent = (unsigned)compute_fragmentation_percent(heap_free, heap_largest);
 
     Logger.logMessagef(
         "Mem",
