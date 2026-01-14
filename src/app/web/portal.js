@@ -3244,13 +3244,17 @@ let healthHistoryMaxSamples = 60;
 
 const healthHistory = {
     cpu: [],
+    cpuTs: [],
     heapInternalFree: [],
+    heapInternalFreeTs: [],
     heapInternalFreeMin: [],
     heapInternalFreeMax: [],
     psramFree: [],
+    psramFreeTs: [],
     psramFreeMin: [],
     psramFreeMax: [],
     wifiRssi: [],
+    wifiRssiTs: [],
 };
 
 function healthConfigureFromDeviceInfo(info) {
@@ -3270,6 +3274,337 @@ function healthPushSample(arr, value) {
     while (arr.length > healthHistoryMaxSamples) arr.shift();
 }
 
+function healthPushSampleWithTs(valuesArr, tsArr, value, ts) {
+    if (!Array.isArray(valuesArr) || !Array.isArray(tsArr)) return;
+    if (typeof value !== 'number' || !isFinite(value)) return;
+    if (typeof ts !== 'number' || !isFinite(ts)) return;
+    valuesArr.push(value);
+    tsArr.push(ts);
+    while (valuesArr.length > healthHistoryMaxSamples) valuesArr.shift();
+    while (tsArr.length > healthHistoryMaxSamples) tsArr.shift();
+}
+
+function healthFormatAgeMs(ageMs) {
+    if (typeof ageMs !== 'number' || !isFinite(ageMs)) return '';
+    const s = Math.max(0, Math.round(ageMs / 1000));
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    if (m < 60) return `${m}m ${r}s ago`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return `${h}h ${rm}m ago`;
+}
+
+function healthFormatTimeOfDay(ts) {
+    try {
+        return new Date(ts).toLocaleTimeString([], { hour12: false });
+    } catch (_) {
+        return '';
+    }
+}
+
+let healthSparklineTooltipEl = null;
+function healthEnsureSparklineTooltip() {
+    if (healthSparklineTooltipEl) return healthSparklineTooltipEl;
+    const el = document.createElement('div');
+    el.className = 'health-sparkline-tooltip';
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    healthSparklineTooltipEl = el;
+    return el;
+}
+
+function healthTooltipSetVisible(visible) {
+    const el = healthEnsureSparklineTooltip();
+    el.style.display = visible ? 'block' : 'none';
+}
+
+function healthTooltipSetContent(html) {
+    const el = healthEnsureSparklineTooltip();
+    el.innerHTML = html;
+}
+
+function healthTooltipSetPosition(clientX, clientY) {
+    const el = healthEnsureSparklineTooltip();
+
+    const pad = 12;
+    let x = (clientX || 0) + pad;
+    let y = (clientY || 0) + pad;
+
+    // Keep the tooltip within the viewport.
+    const vw = window.innerWidth || 0;
+    const vh = window.innerHeight || 0;
+
+    // Prevent the tooltip from becoming narrow when close to the right edge.
+    // For positioned elements, shrink-to-fit width depends on remaining space.
+    const maxW = (vw > 0) ? Math.max(140, vw - pad * 2) : 320;
+    const desiredW = 280;
+    el.style.width = `${Math.min(desiredW, maxW)}px`;
+    el.style.maxWidth = `${maxW}px`;
+
+    // Temporarily show to measure.
+    const prevDisplay = el.style.display;
+    el.style.display = 'block';
+    const rect = el.getBoundingClientRect();
+    el.style.display = prevDisplay;
+
+    if (vw > 0 && rect.width > 0 && x + rect.width + pad > vw) {
+        x = Math.max(pad, vw - rect.width - pad);
+    }
+    if (vh > 0 && rect.height > 0 && y + rect.height + pad > vh) {
+        y = Math.max(pad, vh - rect.height - pad);
+    }
+
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+}
+
+function healthSparklineIndexFromEvent(canvas, clientX) {
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width || 0;
+    if (w <= 0) return null;
+    const x = (clientX - rect.left);
+    const t = Math.max(0, Math.min(1, x / w));
+    return t;
+}
+
+const healthSparklineHoverIndex = {
+    'health-sparkline-cpu': null,
+    'health-sparkline-heap': null,
+    'health-sparkline-psram': null,
+    'health-sparkline-rssi': null,
+};
+
+function healthSetSparklineHoverIndex(canvasId, index) {
+    if (!canvasId) return;
+    if (!(canvasId in healthSparklineHoverIndex)) return;
+    if (typeof index !== 'number' || !isFinite(index)) {
+        healthSparklineHoverIndex[canvasId] = null;
+        return;
+    }
+    healthSparklineHoverIndex[canvasId] = index | 0;
+}
+
+function healthGetSparklineHoverIndex(canvasId) {
+    if (!canvasId) return null;
+    if (!(canvasId in healthSparklineHoverIndex)) return null;
+    const v = healthSparklineHoverIndex[canvasId];
+    return (typeof v === 'number' && isFinite(v)) ? (v | 0) : null;
+}
+
+function healthDrawSparklinesOnly({ hasPsram = null } = {}) {
+    const resolvedHasPsram = (typeof hasPsram === 'boolean') ? hasPsram : (healthHistory.psramFree && healthHistory.psramFree.length > 0);
+
+    sparklineDraw(document.getElementById('health-sparkline-cpu'), healthHistory.cpu, {
+        color: '#667eea',
+        min: 0,
+        max: 100,
+        highlightIndex: healthGetSparklineHoverIndex('health-sparkline-cpu'),
+    });
+
+    sparklineDraw(document.getElementById('health-sparkline-heap'), healthHistory.heapInternalFree, {
+        color: '#34c759',
+        bandMin: healthHistory.heapInternalFreeMin,
+        bandMax: healthHistory.heapInternalFreeMax,
+        bandColor: 'rgba(52, 199, 89, 0.18)',
+        highlightIndex: healthGetSparklineHoverIndex('health-sparkline-heap'),
+    });
+
+    if (resolvedHasPsram) {
+        sparklineDraw(document.getElementById('health-sparkline-psram'), healthHistory.psramFree, {
+            color: '#0a84ff',
+            bandMin: healthHistory.psramFreeMin,
+            bandMax: healthHistory.psramFreeMax,
+            bandColor: 'rgba(10, 132, 255, 0.18)',
+            highlightIndex: healthGetSparklineHoverIndex('health-sparkline-psram'),
+        });
+    } else {
+        // Still draw baseline placeholder if canvas exists.
+        sparklineDraw(document.getElementById('health-sparkline-psram'), healthHistory.psramFree, {
+            color: '#0a84ff',
+            bandMin: healthHistory.psramFreeMin,
+            bandMax: healthHistory.psramFreeMax,
+            bandColor: 'rgba(10, 132, 255, 0.18)',
+            highlightIndex: null,
+        });
+    }
+
+    sparklineDraw(document.getElementById('health-sparkline-rssi'), healthHistory.wifiRssi, {
+        color: '#ff9500',
+        min: -100,
+        max: -30,
+        highlightIndex: healthGetSparklineHoverIndex('health-sparkline-rssi'),
+    });
+}
+
+function healthAttachSparklineTooltip(canvas, getPayloadForIndex) {
+    if (!canvas || typeof getPayloadForIndex !== 'function') return;
+    if (canvas.dataset && canvas.dataset.healthTooltipAttached === '1') return;
+    if (canvas.dataset) canvas.dataset.healthTooltipAttached = '1';
+
+    let hideTimer = null;
+    const clearHideTimer = () => {
+        if (hideTimer) {
+            clearTimeout(hideTimer);
+            hideTimer = null;
+        }
+    };
+
+    const hide = () => {
+        clearHideTimer();
+        healthSetSparklineHoverIndex(canvas.id, null);
+        healthDrawSparklinesOnly({
+            hasPsram: (() => {
+                const wrap = document.getElementById('health-sparkline-psram-wrap');
+                return wrap ? (wrap.style.display !== 'none') : null;
+            })(),
+        });
+        healthTooltipSetVisible(false);
+    };
+
+    const showAt = (clientX, clientY) => {
+        clearHideTimer();
+        const t = healthSparklineIndexFromEvent(canvas, clientX);
+        if (t === null) return;
+
+        const payload = getPayloadForIndex(t);
+        if (!payload) return;
+
+        if (typeof payload.index === 'number' && isFinite(payload.index)) {
+            const prev = healthGetSparklineHoverIndex(canvas.id);
+            const next = payload.index | 0;
+            if (prev !== next) {
+                healthSetSparklineHoverIndex(canvas.id, next);
+                healthDrawSparklinesOnly({
+                    hasPsram: (() => {
+                        const wrap = document.getElementById('health-sparkline-psram-wrap');
+                        return wrap ? (wrap.style.display !== 'none') : null;
+                    })(),
+                });
+            }
+        }
+
+        healthTooltipSetContent(payload.html);
+        healthTooltipSetPosition(clientX, clientY);
+        healthTooltipSetVisible(true);
+    };
+
+    canvas.addEventListener('mousemove', (e) => {
+        showAt(e.clientX, e.clientY);
+    });
+    canvas.addEventListener('mouseleave', hide);
+
+    // Touch: tap/drag shows tooltip; auto-hide shortly after touch ends.
+    canvas.addEventListener('touchstart', (e) => {
+        if (!e.touches || e.touches.length < 1) return;
+        const t0 = e.touches[0];
+        showAt(t0.clientX, t0.clientY);
+    }, { passive: true });
+    canvas.addEventListener('touchmove', (e) => {
+        if (!e.touches || e.touches.length < 1) return;
+        const t0 = e.touches[0];
+        showAt(t0.clientX, t0.clientY);
+    }, { passive: true });
+    canvas.addEventListener('touchend', () => {
+        clearHideTimer();
+        hideTimer = setTimeout(hide, 1200);
+    }, { passive: true });
+}
+
+function healthInitSparklineTooltips() {
+    const cpuCanvas = document.getElementById('health-sparkline-cpu');
+    healthAttachSparklineTooltip(cpuCanvas, (t) => {
+        const v = healthHistory.cpu;
+        const ts = healthHistory.cpuTs;
+        const n = v.length;
+        if (n < 1) return null;
+        const i = Math.max(0, Math.min(n - 1, Math.round(t * (n - 1))));
+        const val = v[i];
+        const tsv = ts[i];
+        const age = healthFormatAgeMs(Date.now() - tsv);
+        const tod = healthFormatTimeOfDay(tsv);
+        return {
+            index: i,
+            html: `<div class="health-sparkline-tooltip-title">CPU Usage</div>` +
+                `<div class="health-sparkline-tooltip-row"><span>${tod}</span><span>${age}</span></div>` +
+                `<div class="health-sparkline-tooltip-value">${val}%</div>`,
+        };
+    });
+
+    const heapCanvas = document.getElementById('health-sparkline-heap');
+    healthAttachSparklineTooltip(heapCanvas, (t) => {
+        const v = healthHistory.heapInternalFree;
+        const ts = healthHistory.heapInternalFreeTs;
+        const bmin = healthHistory.heapInternalFreeMin;
+        const bmax = healthHistory.heapInternalFreeMax;
+        const n = v.length;
+        if (n < 1) return null;
+        const i = Math.max(0, Math.min(n - 1, Math.round(t * (n - 1))));
+        const val = v[i];
+        const tsv = ts[i];
+        const wmin = (i < bmin.length) ? bmin[i] : val;
+        const wmax = (i < bmax.length) ? bmax[i] : val;
+        const age = healthFormatAgeMs(Date.now() - tsv);
+        const tod = healthFormatTimeOfDay(tsv);
+        const range = (typeof wmin === 'number' && typeof wmax === 'number') ? `${healthFormatBytes(wmin)} – ${healthFormatBytes(wmax)}` : '—';
+        const delta = (typeof wmin === 'number' && typeof wmax === 'number') ? healthFormatBytes(Math.max(0, wmax - wmin)) : '—';
+        return {
+            index: i,
+            html: `<div class="health-sparkline-tooltip-title">Internal Free Heap</div>` +
+                `<div class="health-sparkline-tooltip-row"><span>${tod}</span><span>${age}</span></div>` +
+                `<div class="health-sparkline-tooltip-value">${healthFormatBytes(val)}</div>` +
+            `<div class="health-sparkline-tooltip-sub">Window min/max: ${range} (Δ ${delta})</div>`,
+        };
+    });
+
+    const psramCanvas = document.getElementById('health-sparkline-psram');
+    healthAttachSparklineTooltip(psramCanvas, (t) => {
+        const v = healthHistory.psramFree;
+        const ts = healthHistory.psramFreeTs;
+        const bmin = healthHistory.psramFreeMin;
+        const bmax = healthHistory.psramFreeMax;
+        const n = v.length;
+        if (n < 1) return null;
+        const i = Math.max(0, Math.min(n - 1, Math.round(t * (n - 1))));
+        const val = v[i];
+        const tsv = ts[i];
+        const wmin = (i < bmin.length) ? bmin[i] : val;
+        const wmax = (i < bmax.length) ? bmax[i] : val;
+        const age = healthFormatAgeMs(Date.now() - tsv);
+        const tod = healthFormatTimeOfDay(tsv);
+        const range = (typeof wmin === 'number' && typeof wmax === 'number') ? `${healthFormatBytes(wmin)} – ${healthFormatBytes(wmax)}` : '—';
+        const delta = (typeof wmin === 'number' && typeof wmax === 'number') ? healthFormatBytes(Math.max(0, wmax - wmin)) : '—';
+        return {
+            index: i,
+            html: `<div class="health-sparkline-tooltip-title">PSRAM Free</div>` +
+                `<div class="health-sparkline-tooltip-row"><span>${tod}</span><span>${age}</span></div>` +
+                `<div class="health-sparkline-tooltip-value">${healthFormatBytes(val)}</div>` +
+            `<div class="health-sparkline-tooltip-sub">Window min/max: ${range} (Δ ${delta})</div>`,
+        };
+    });
+
+    const rssiCanvas = document.getElementById('health-sparkline-rssi');
+    healthAttachSparklineTooltip(rssiCanvas, (t) => {
+        const v = healthHistory.wifiRssi;
+        const ts = healthHistory.wifiRssiTs;
+        const n = v.length;
+        if (n < 1) return null;
+        const i = Math.max(0, Math.min(n - 1, Math.round(t * (n - 1))));
+        const val = v[i];
+        const tsv = ts[i];
+        const age = healthFormatAgeMs(Date.now() - tsv);
+        const tod = healthFormatTimeOfDay(tsv);
+        return {
+            index: i,
+            html: `<div class="health-sparkline-tooltip-title">WiFi RSSI</div>` +
+                `<div class="health-sparkline-tooltip-row"><span>${tod}</span><span>${age}</span></div>` +
+                `<div class="health-sparkline-tooltip-value">${val} dBm</div>`,
+        };
+    });
+}
+
 function healthFormatBytes(bytes) {
     if (typeof bytes !== 'number' || !isFinite(bytes)) return '—';
     return formatHeap(bytes);
@@ -3283,6 +3618,11 @@ function sparklineDraw(canvas, values, {
     bandMin = null,
     bandMax = null,
     bandColor = 'rgba(102, 126, 234, 0.18)',
+    highlightIndex = null,
+    highlightRadius = 3.25,
+    highlightFill = 'rgba(255,255,255,0.95)',
+    highlightStroke = null,
+    highlightStrokeWidth = 2,
 } = {}) {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -3393,6 +3733,19 @@ function sparklineDraw(canvas, values, {
         ctx.beginPath();
         ctx.arc(x, y, 2.5, 0, Math.PI * 2);
         ctx.stroke();
+
+        if (highlightIndex === 0) {
+            const strokeCol = highlightStroke || color;
+            ctx.fillStyle = highlightFill;
+            ctx.beginPath();
+            ctx.arc(x, y, Math.max(2.5, highlightRadius), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = strokeCol;
+            ctx.lineWidth = highlightStrokeWidth;
+            ctx.beginPath();
+            ctx.arc(x, y, Math.max(2.5, highlightRadius), 0, Math.PI * 2);
+            ctx.stroke();
+        }
         return;
     }
 
@@ -3405,6 +3758,28 @@ function sparklineDraw(canvas, values, {
         else ctx.lineTo(x, y);
     }
     ctx.stroke();
+
+    if (typeof highlightIndex === 'number' && isFinite(highlightIndex)) {
+        const idx = Math.max(0, Math.min(data.length - 1, highlightIndex | 0));
+        const v = data[idx];
+        if (typeof v === 'number' && isFinite(v)) {
+            const x = pad + idx * xStep;
+            const y = h - pad - ((v - vmin) * yScale);
+            const strokeCol = highlightStroke || color;
+            const r = Math.max(2.0, highlightRadius);
+
+            ctx.fillStyle = highlightFill;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.strokeStyle = strokeCol;
+            ctx.lineWidth = highlightStrokeWidth;
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
 }
 
 // Format uptime to readable string
@@ -3450,14 +3825,16 @@ async function updateHealth() {
         
         const health = await response.json();
 
+        const sampleTs = Date.now();
+
         const hasPsram = (
             (deviceInfoCache && typeof deviceInfoCache.psram_size === 'number' && deviceInfoCache.psram_size > 0) ||
             (typeof health.psram_free === 'number' && health.psram_free > 0)
         );
 
         // Feed client-side history buffers (no device-side time series).
-        healthPushSample(healthHistory.cpu, health.cpu_usage);
-        healthPushSample(healthHistory.heapInternalFree, health.heap_internal_free);
+        healthPushSampleWithTs(healthHistory.cpu, healthHistory.cpuTs, health.cpu_usage, sampleTs);
+        healthPushSampleWithTs(healthHistory.heapInternalFree, healthHistory.heapInternalFreeTs, health.heap_internal_free, sampleTs);
         {
             const cur = health.heap_internal_free;
             const wmin = (typeof health.heap_internal_free_min_window === 'number') ? Math.min(health.heap_internal_free_min_window, cur) : cur;
@@ -3466,7 +3843,7 @@ async function updateHealth() {
             healthPushSample(healthHistory.heapInternalFreeMax, wmax);
         }
         if (hasPsram) {
-            healthPushSample(healthHistory.psramFree, health.psram_free);
+            healthPushSampleWithTs(healthHistory.psramFree, healthHistory.psramFreeTs, health.psram_free, sampleTs);
             {
                 const cur = health.psram_free;
                 const wmin = (typeof health.psram_free_min_window === 'number') ? Math.min(health.psram_free_min_window, cur) : cur;
@@ -3476,7 +3853,7 @@ async function updateHealth() {
             }
         }
         if (health.wifi_rssi !== null && health.wifi_rssi !== undefined) {
-            healthPushSample(healthHistory.wifiRssi, health.wifi_rssi);
+            healthPushSampleWithTs(healthHistory.wifiRssi, healthHistory.wifiRssiTs, health.wifi_rssi, sampleTs);
         }
         
         // Update compact view
@@ -3508,33 +3885,20 @@ async function updateHealth() {
         // Sparklines
         const cpuSparkValue = document.getElementById('health-sparkline-cpu-value');
         if (cpuSparkValue) cpuSparkValue.textContent = `${health.cpu_usage}%`;
-        sparklineDraw(document.getElementById('health-sparkline-cpu'), healthHistory.cpu, { color: '#667eea', min: 0, max: 100 });
 
         const heapSparkValue = document.getElementById('health-sparkline-heap-value');
         if (heapSparkValue) heapSparkValue.textContent = healthFormatBytes(health.heap_internal_free);
-        sparklineDraw(document.getElementById('health-sparkline-heap'), healthHistory.heapInternalFree, {
-            color: '#34c759',
-            bandMin: healthHistory.heapInternalFreeMin,
-            bandMax: healthHistory.heapInternalFreeMax,
-            bandColor: 'rgba(52, 199, 89, 0.18)',
-        });
 
         const psramWrap = document.getElementById('health-sparkline-psram-wrap');
         if (psramWrap) psramWrap.style.display = hasPsram ? '' : 'none';
         const psramSparkValue = document.getElementById('health-sparkline-psram-value');
         if (psramSparkValue) psramSparkValue.textContent = hasPsram ? healthFormatBytes(health.psram_free) : '—';
-        sparklineDraw(document.getElementById('health-sparkline-psram'), healthHistory.psramFree, {
-            color: '#0a84ff',
-            bandMin: healthHistory.psramFreeMin,
-            bandMax: healthHistory.psramFreeMax,
-            bandColor: 'rgba(10, 132, 255, 0.18)',
-        });
 
         const rssiSparkValue = document.getElementById('health-sparkline-rssi-value');
         if (rssiSparkValue) {
             rssiSparkValue.textContent = (health.wifi_rssi !== null && health.wifi_rssi !== undefined) ? `${health.wifi_rssi} dBm` : 'N/A';
         }
-        sparklineDraw(document.getElementById('health-sparkline-rssi'), healthHistory.wifiRssi, { color: '#ff9500', min: -100, max: -30 });
+        healthDrawSparklinesOnly({ hasPsram });
         
         // Memory
         document.getElementById('health-heap').textContent = formatHeap(health.heap_free);
@@ -3643,6 +4007,9 @@ function toggleHealthWidget() {
 function initHealthWidget() {
     // Configure polling based on device info if available.
     healthConfigureFromDeviceInfo(deviceInfoCache);
+
+    // Attach hover/touch tooltips once.
+    healthInitSparklineTooltips();
 
     // Click health badge in header to expand
     const healthBadge = document.getElementById('health-badge');
