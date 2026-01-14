@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-01-14
+
+### Added
+- Add a runtime diagnostics “health overlay” with sparklines (CPU usage, internal heap free, PSRAM free when present, WiFi RSSI).
+- Add firmware-side window sampling (200ms, FreeRTOS timer) to capture heap/PSRAM min/max and related extrema between `/api/health` polls.
+- Add cached filesystem health fields to `/api/health` (no mounting/probing inside the request handler).
+- Add MQTT connection/publish health fields to `/api/health`.
+- Add display performance stats to `/api/health` when `HAS_DISPLAY` is enabled.
+
+### Changed
+- Make `/api/health` and the portal UI treat CPU usage as unknown when runtime stats are unavailable (return `null`, render `—`, don’t record a bogus 0% sample).
+- Avoid per-request `String` heap churn for IP formatting in `/api/health` by using a fixed-size buffer.
+- Remove CPU usage min/max fields everywhere (API/UI/MQTT/Home Assistant discovery).
+- Update the compile-time flags report documentation.
+
 ## [1.4.3] - 2026-01-13
 
 ### Fixed
