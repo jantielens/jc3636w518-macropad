@@ -42,6 +42,15 @@ static bool first_calculation = true;
 
 #define CPU_MINMAX_WINDOW_SECONDS 60
 
+static bool log_every_ms(unsigned long now_ms, unsigned long *last_ms, unsigned long interval_ms) {
+    if (!last_ms) return false;
+    if (*last_ms == 0 || (now_ms - *last_ms) >= interval_ms) {
+        *last_ms = now_ms;
+        return true;
+    }
+    return false;
+}
+
 // Flash/sketch metadata caching (avoid re-entrant ESP-IDF image/mmap helpers)
 static bool flash_cache_initialized = false;
 static size_t cached_sketch_size = 0;
@@ -453,9 +462,45 @@ size_t device_telemetry_free_sketch_space() {
 
 // Internal: Calculate CPU usage from IDLE task runtime
 static int calculate_cpu_usage() {
-    TaskStatus_t task_stats[16];
-    uint32_t total_runtime;
-    int task_count = uxTaskGetSystemState(task_stats, 16, &total_runtime);
+    // IMPORTANT:
+    // - uxTaskGetSystemState returns 0 when the provided array is too small.
+    // - TaskStatus_t is fairly large; keep this out of stack (CPU monitor task stack is small).
+    // - If runtime stats aren't enabled, total_runtime and ulRunTimeCounter stay 0 -> treat as unknown.
+    constexpr UBaseType_t kMaxTasks = 24;
+    static TaskStatus_t task_stats[kMaxTasks];
+
+    // Guard: if there are more tasks than we can sample, bail out and log.
+    // This keeps the static array size fixed (no extra RAM), while making truncation visible.
+    static unsigned long last_truncation_log_ms = 0;
+    const unsigned long now_ms = millis();
+    const UBaseType_t expected_tasks = uxTaskGetNumberOfTasks();
+    if (expected_tasks > kMaxTasks) {
+        if (log_every_ms(now_ms, &last_truncation_log_ms, 5000)) {
+            Logger.logQuickf(
+                "CPU",
+                "Runtime stats truncated: tasks=%u > max=%u (cpu_usage unavailable)",
+                (unsigned)expected_tasks,
+                (unsigned)kMaxTasks
+            );
+        }
+        return -1;
+    }
+
+    uint32_t total_runtime = 0;
+    const int task_count = uxTaskGetSystemState(task_stats, kMaxTasks, &total_runtime);
+
+    static unsigned long last_runtime_stats_log_ms = 0;
+    if (task_count <= 0 || total_runtime == 0) {
+        if (log_every_ms(now_ms, &last_runtime_stats_log_ms, 5000)) {
+            Logger.logQuickf(
+                "CPU",
+                "Runtime stats unavailable: uxTaskGetSystemState=%d total_runtime=%lu",
+                task_count,
+                (unsigned long)total_runtime
+            );
+        }
+        return -1;
+    }
 
     // Count IDLE tasks and sum their runtimes
     uint32_t idle_runtime = 0;
@@ -467,12 +512,14 @@ static int calculate_cpu_usage() {
         }
     }
 
+    if (idle_task_count <= 0) return -1;
+
     // Skip first calculation (need delta)
     if (first_calculation) {
         last_idle_runtime = idle_runtime;
         last_total_runtime = total_runtime;
         first_calculation = false;
-        return 0;
+        return -1;
     }
 
     // Calculate delta
@@ -482,7 +529,7 @@ static int calculate_cpu_usage() {
     last_idle_runtime = idle_runtime;
     last_total_runtime = total_runtime;
 
-    if (total_delta == 0) return 0;
+    if (total_delta == 0) return -1;
 
     // FreeRTOS uxTaskGetSystemState:
     // - total_runtime = elapsed wall-clock time (in timer ticks) since boot
@@ -495,7 +542,7 @@ static int calculate_cpu_usage() {
     //
     // CPU usage = 100 - (idle_time / max_possible_idle_time * 100)
     uint32_t max_idle_time = total_delta * idle_task_count;
-    if (max_idle_time == 0) return 0;
+    if (max_idle_time == 0) return -1;
     
     float idle_percent = ((float)idle_delta / max_idle_time) * 100.0f;
     int cpu_usage = (int)(100.0f - idle_percent);
@@ -514,17 +561,22 @@ static void cpu_monitoring_task(void* param) {
         
         xSemaphoreTake(cpu_mutex, portMAX_DELAY);
         
-        cpu_usage_current = new_value;
-        
-        // Update min/max
-        if (new_value < cpu_usage_min) cpu_usage_min = new_value;
-        if (new_value > cpu_usage_max) cpu_usage_max = new_value;
-        
-        // Reset min/max every 60 seconds
-        if (last_minmax_reset == 0 || (now - last_minmax_reset >= CPU_MINMAX_WINDOW_SECONDS * 1000UL)) {
-            cpu_usage_min = new_value;
-            cpu_usage_max = new_value;
-            last_minmax_reset = now;
+        if (new_value >= 0) {
+            cpu_usage_current = new_value;
+
+            // Update min/max
+            if (new_value < cpu_usage_min) cpu_usage_min = new_value;
+            if (new_value > cpu_usage_max) cpu_usage_max = new_value;
+
+            // Reset min/max every 60 seconds
+            if (last_minmax_reset == 0 || (now - last_minmax_reset >= CPU_MINMAX_WINDOW_SECONDS * 1000UL)) {
+                cpu_usage_min = new_value;
+                cpu_usage_max = new_value;
+                last_minmax_reset = now;
+            }
+        } else {
+            // Unknown / unsupported measurement
+            cpu_usage_current = -1;
         }
         
         xSemaphoreGive(cpu_mutex);
@@ -611,11 +663,18 @@ static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool inc
     }
 
     // CPU usage with min/max over 60s window
-    doc["cpu_usage"] = device_telemetry_get_cpu_usage();
-    int cpu_min, cpu_max;
-    device_telemetry_get_cpu_minmax(&cpu_min, &cpu_max);
-    doc["cpu_usage_min"] = cpu_min;
-    doc["cpu_usage_max"] = cpu_max;
+    const int cpu_usage = device_telemetry_get_cpu_usage();
+    if (cpu_usage >= 0) {
+        doc["cpu_usage"] = cpu_usage;
+        int cpu_min, cpu_max;
+        device_telemetry_get_cpu_minmax(&cpu_min, &cpu_max);
+        doc["cpu_usage_min"] = cpu_min;
+        doc["cpu_usage_max"] = cpu_max;
+    } else {
+        doc["cpu_usage"] = nullptr;
+        doc["cpu_usage_min"] = nullptr;
+        doc["cpu_usage_max"] = nullptr;
+    }
 
     // CPU / SoC temperature
 #if SOC_TEMP_SENSOR_SUPPORTED

@@ -3827,13 +3827,17 @@ async function updateHealth() {
 
         const sampleTs = Date.now();
 
+        const cpuUsage = (typeof health.cpu_usage === 'number' && isFinite(health.cpu_usage)) ? Math.floor(health.cpu_usage) : null;
+
         const hasPsram = (
             (deviceInfoCache && typeof deviceInfoCache.psram_size === 'number' && deviceInfoCache.psram_size > 0) ||
             (typeof health.psram_free === 'number' && health.psram_free > 0)
         );
 
         // Feed client-side history buffers (no device-side time series).
-        healthPushSampleWithTs(healthHistory.cpu, healthHistory.cpuTs, health.cpu_usage, sampleTs);
+        if (cpuUsage !== null) {
+            healthPushSampleWithTs(healthHistory.cpu, healthHistory.cpuTs, cpuUsage, sampleTs);
+        }
         healthPushSampleWithTs(healthHistory.heapInternalFree, healthHistory.heapInternalFreeTs, health.heap_internal_free, sampleTs);
         {
             const cur = health.heap_internal_free;
@@ -3857,7 +3861,7 @@ async function updateHealth() {
         }
         
         // Update compact view
-        document.getElementById('health-cpu').textContent = `CPU ${health.cpu_usage}%`;
+        document.getElementById('health-cpu').textContent = (cpuUsage !== null) ? `CPU ${cpuUsage}%` : 'CPU —';
         
         // Trigger breathing animation on status dots
         const dot = document.getElementById('health-status-dot');
@@ -3877,14 +3881,18 @@ async function updateHealth() {
         document.getElementById('health-reset').textContent = health.reset_reason || 'Unknown';
         
         // CPU
-        document.getElementById('health-cpu-full').textContent = `${health.cpu_usage}%`;
-        document.getElementById('health-cpu-minmax').textContent = `${health.cpu_usage_min}% / ${health.cpu_usage_max}%`;
+        document.getElementById('health-cpu-full').textContent = (cpuUsage !== null) ? `${cpuUsage}%` : '—';
+        if (cpuUsage !== null && typeof health.cpu_usage_min === 'number' && typeof health.cpu_usage_max === 'number') {
+            document.getElementById('health-cpu-minmax').textContent = `${health.cpu_usage_min}% / ${health.cpu_usage_max}%`;
+        } else {
+            document.getElementById('health-cpu-minmax').textContent = '—';
+        }
         document.getElementById('health-temp').textContent = health.cpu_temperature !== null ? 
             `${health.cpu_temperature}°C` : 'N/A';
 
         // Sparklines
         const cpuSparkValue = document.getElementById('health-sparkline-cpu-value');
-        if (cpuSparkValue) cpuSparkValue.textContent = `${health.cpu_usage}%`;
+        if (cpuSparkValue) cpuSparkValue.textContent = (cpuUsage !== null) ? `${cpuUsage}%` : '—';
 
         const heapSparkValue = document.getElementById('health-sparkline-heap-value');
         if (heapSparkValue) heapSparkValue.textContent = healthFormatBytes(health.heap_internal_free);
