@@ -27,20 +27,15 @@
 #include "driver/temperature_sensor.h"
 #endif
 
-// CPU usage tracking (task-based with min/max over 60s window)
+// CPU usage tracking (task-based)
 static SemaphoreHandle_t cpu_mutex = nullptr;
 static int cpu_usage_current = 0;
-static int cpu_usage_min = 100;
-static int cpu_usage_max = 0;
-static unsigned long last_minmax_reset = 0;
 static TaskHandle_t cpu_task_handle = nullptr;
 
 // Delta tracking for calculation
 static uint32_t last_idle_runtime = 0;
 static uint32_t last_total_runtime = 0;
 static bool first_calculation = true;
-
-#define CPU_MINMAX_WINDOW_SECONDS 60
 
 static bool log_every_ms(unsigned long now_ms, unsigned long *last_ms, unsigned long interval_ms) {
     if (!last_ms) return false;
@@ -377,6 +372,8 @@ void device_telemetry_dump_task_stack_watermarks(const char *tag) {
 }
 
 void device_telemetry_fill_api(JsonDocument &doc) {
+    // Web portal /api/health payload
+    // - include IP/channel and debug fields
     fill_common(doc, true, true);
 
     // =====================================================================
@@ -397,6 +394,7 @@ void device_telemetry_fill_api(JsonDocument &doc) {
 }
 
 void device_telemetry_fill_mqtt(JsonDocument &doc) {
+    // MQTT payload
     fill_common(doc, false, false);
 
     // =====================================================================
@@ -553,27 +551,15 @@ static int calculate_cpu_usage() {
     return cpu_usage;
 }
 
-// Background task: Calculate CPU usage every 1s, track min/max over 60s window
+// Background task: Calculate CPU usage every 1s
 static void cpu_monitoring_task(void* param) {
     while (true) {
         int new_value = calculate_cpu_usage();
-        unsigned long now = millis();
         
         xSemaphoreTake(cpu_mutex, portMAX_DELAY);
         
         if (new_value >= 0) {
             cpu_usage_current = new_value;
-
-            // Update min/max
-            if (new_value < cpu_usage_min) cpu_usage_min = new_value;
-            if (new_value > cpu_usage_max) cpu_usage_max = new_value;
-
-            // Reset min/max every 60 seconds
-            if (last_minmax_reset == 0 || (now - last_minmax_reset >= CPU_MINMAX_WINDOW_SECONDS * 1000UL)) {
-                cpu_usage_min = new_value;
-                cpu_usage_max = new_value;
-                last_minmax_reset = now;
-            }
         } else {
             // Unknown / unsupported measurement
             cpu_usage_current = -1;
@@ -620,19 +606,6 @@ int device_telemetry_get_cpu_usage() {
     return value;
 }
 
-void device_telemetry_get_cpu_minmax(int* out_min, int* out_max) {
-    if (cpu_mutex == nullptr) {
-        if (out_min) *out_min = 0;
-        if (out_max) *out_max = 0;
-        return;
-    }
-    
-    xSemaphoreTake(cpu_mutex, portMAX_DELAY);
-    if (out_min) *out_min = cpu_usage_min;
-    if (out_max) *out_max = cpu_usage_max;
-    xSemaphoreGive(cpu_mutex);
-}
-
 static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool include_debug_fields) {
     fs_health_init();
 
@@ -662,18 +635,12 @@ static void fill_common(JsonDocument &doc, bool include_ip_and_channel, bool inc
         doc["cpu_freq"] = ESP.getCpuFreqMHz();
     }
 
-    // CPU usage with min/max over 60s window
+    // CPU usage
     const int cpu_usage = device_telemetry_get_cpu_usage();
     if (cpu_usage >= 0) {
         doc["cpu_usage"] = cpu_usage;
-        int cpu_min, cpu_max;
-        device_telemetry_get_cpu_minmax(&cpu_min, &cpu_max);
-        doc["cpu_usage_min"] = cpu_min;
-        doc["cpu_usage_max"] = cpu_max;
     } else {
         doc["cpu_usage"] = nullptr;
-        doc["cpu_usage_min"] = nullptr;
-        doc["cpu_usage_max"] = nullptr;
     }
 
     // CPU / SoC temperature

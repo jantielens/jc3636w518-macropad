@@ -3971,11 +3971,6 @@ async function updateHealth() {
         
         // CPU
         document.getElementById('health-cpu-full').textContent = (cpuUsage !== null) ? `${cpuUsage}%` : '—';
-        if (cpuUsage !== null && typeof health.cpu_usage_min === 'number' && typeof health.cpu_usage_max === 'number') {
-            document.getElementById('health-cpu-minmax').textContent = `${health.cpu_usage_min}% / ${health.cpu_usage_max}%`;
-        } else {
-            document.getElementById('health-cpu-minmax').textContent = '—';
-        }
         document.getElementById('health-temp').textContent = health.cpu_temperature !== null ? 
             `${health.cpu_temperature}°C` : 'N/A';
 
